@@ -6,6 +6,11 @@ Versioning.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-13
+
+First release. gRPC for Erlang on the livery HTTP/2 stack: server and
+client, all four call types, and the surrounding ecosystem.
+
 ### Added
 - Project scaffold: OTP application, supervisor, build pipeline with
   `gpb` and `rebar3_gpb_plugin`, sample `helloworld.proto`.
