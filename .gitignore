@@ -8,6 +8,9 @@ erl_crash.dump
 /src/*_pb.erl
 /include/*_pb.hrl
 
+# Generated client stubs / service behaviours (make stubs).
+/gen/
+
 # ex_doc output lands in doc/; keep the planning doc, ignore the rest.
 doc/*
 !doc/features.md

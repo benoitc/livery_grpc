@@ -129,6 +129,22 @@ say_hello_chat(Stream, _Ctx) ->
 On the client, use `client_stream/3` for client-streaming, and `open/2` +
 `send/2` + `send_end/1` + `recv/1` for bidirectional.
 
+### Generated stubs (optional)
+
+`make stubs PROTO=helloworld_pb` generates, per service, a
+`<service>_client` (an `erpc`-style call per RPC) and a
+`<service>_service` behaviour:
+
+```erlang
+{ok, Reply} = greeter_client:say_hello(Conn, #{name => <<"ada">>}).
+
+-module(my_greeter).
+-behaviour(greeter_service).   %% the compiler checks the callbacks
+```
+
+This is sugar over `livery_grpc_client` and the descriptor lookup; you can
+always call services without it.
+
 ## Reflection
 
 Start the server with `reflection => true` to mount

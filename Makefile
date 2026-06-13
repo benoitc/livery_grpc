@@ -1,4 +1,4 @@
-.PHONY: compile proto eunit ct test interop dialyzer xref lint fmt check clean
+.PHONY: compile proto stubs eunit ct test interop dialyzer xref lint fmt check clean
 
 compile:
 	rebar3 compile
@@ -6,6 +6,14 @@ compile:
 ## Regenerate the fixture *_pb.erl from proto/ (test profile).
 proto:
 	rebar3 as test protobuf compile
+
+## Generate client stubs + service behaviours from a compiled proto module.
+## Override PROTO and STUBS_OUT as needed, e.g. make stubs PROTO=my_pb.
+PROTO ?= helloworld_pb
+STUBS_OUT ?= gen
+stubs: compile
+	erl -noshell -pa _build/default/lib/*/ebin -pa _build/default/checkouts/*/ebin \
+	  -eval 'io:format("~p~n", [livery_grpc_codegen:generate($(PROTO), "$(STUBS_OUT)")]), halt().'
 
 eunit:
 	rebar3 eunit

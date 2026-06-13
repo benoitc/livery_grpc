@@ -58,3 +58,6 @@ Versioning.
 - Health `Watch` now streams live updates: it emits the current status and
   a new message on every change until the client disconnects, backed by a
   small subscription store (`livery_grpc_health_store`).
+- Code generation (`livery_grpc_codegen`, `make stubs`): per service, an
+  `erpc`-style client stub (`greeter_client:say_hello/2`) and a service
+  behaviour (`-behaviour(greeter_service)`) for compiler-checked handlers.

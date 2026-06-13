@@ -26,7 +26,8 @@ extra transport.
 - All four call types: unary, server-streaming, client-streaming,
   bidirectional.
 - Calling a remote service reads like `erpc`; exposing one is a behaviour
-  you implement in Erlang.
+  you implement in Erlang. Optional generated stubs (`make stubs`) give a
+  typed call per RPC and a compiler-checked service behaviour.
 
 ## Layout
 
