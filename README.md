@@ -7,11 +7,12 @@ gRPC wire format is generated from your `.proto` files and handled for you.
 See `docs/quickstart.md` to build and call a service, and
 `doc/features.md` for the plan.
 
-Working today: unary and server-streaming on both the server and client,
-deadlines, error details, gzip, livery middleware as interceptors, the
-standard health service, and gRPC-Web (binary and text). Client-streaming,
-bidirectional streaming, and server reflection are bidirectional and land
-with the underlying HTTP/2 bidi support.
+Working today: all four call types (unary, server-streaming,
+client-streaming, bidirectional) on both the server and client, deadlines,
+error details, gzip, livery middleware as interceptors, the standard
+health service, and gRPC-Web (binary and text). Server reflection is
+deferred (its own RPC is bidirectional; the plumbing is in place to add
+it next).
 
 ## Why
 

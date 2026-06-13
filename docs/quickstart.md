@@ -89,8 +89,32 @@ $ grpcurl -plaintext -proto proto/helloworld.proto \
 `make interop` runs this smoke test for you (skipped if `grpcurl` is not
 installed).
 
+## Streaming
+
+Client-streaming and bidirectional callbacks take a stream handle instead
+of a single request:
+
+```erlang
+%% client-streaming: read all requests, reply once
+say_hello_collect(Stream, _Ctx) ->
+    {ok, Requests, _} = livery_grpc_stream:recv_all(Stream),
+    {ok, #{message => <<"got ", (integer_to_binary(length(Requests)))/binary>>}}.
+
+%% bidirectional: echo each request as it arrives
+say_hello_chat(Stream, _Ctx) ->
+    case livery_grpc_stream:recv(Stream) of
+        {ok, #{name := N}, S1} ->
+            livery_grpc_stream:send(S1, #{message => <<"hi ", N/binary>>}),
+            say_hello_chat(S1, undefined);
+        {eof, _} -> ok
+    end.
+```
+
+On the client, use `client_stream/3` for client-streaming, and `open/2` +
+`send/2` + `send_end/1` + `recv/1` for bidirectional.
+
 ## What works today
 
-Unary and server-streaming, on the server and the client, plus health and
-gRPC-Web. Client-streaming, bidirectional streaming, and server reflection
-are bidirectional and land with the underlying HTTP/2 bidi support.
+All four call types on the server and the client, plus health and
+gRPC-Web. Server reflection is deferred (its RPC is bidirectional; the
+streaming pieces it needs now exist).

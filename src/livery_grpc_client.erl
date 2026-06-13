@@ -17,17 +17,19 @@ The connection's events are delivered to the process that called
 `connect/2,3`, so make calls from that same process. Calls are
 synchronous: each one drives its stream to completion before returning.
 
-This release covers unary and server-streaming. A server-streaming call
-collects all replies; `call/4` returns `{ok, [Reply]}` for that kind.
-Client-streaming and bidirectional arrive with the h2 bidi support they
-need.
+`call/3,4` handles unary (`{ok, Reply}`) and server-streaming (`{ok,
+[Reply]}`). For client-streaming use `client_stream/3,4`; for
+bidirectional (or fine-grained control) use `open/2,3` then `send/2`,
+`send_end/1`, and `recv/1,2`.
 """.
 
 -export([connect/2, connect/3, close/1]).
 -export([method/3]).
 -export([call/3, call/4]).
+-export([client_stream/3, client_stream/4]).
+-export([open/2, open/3, send/2, send_end/1, recv/1, recv/2]).
 
--export_type([conn/0, call_opts/0, call_result/0]).
+-export_type([conn/0, call_opts/0, call_result/0, client_call/0, outcome/0]).
 
 -opaque conn() :: #{pid := pid(), scheme := binary(), authority := binary()}.
 
@@ -54,6 +56,20 @@ need.
     ok
     | {livery_grpc_status:status(), binary()}
     | {livery_grpc_status:status(), binary(), binary()}.
+
+%% A live streaming call: drive it with send/2, send_end/1, and recv/1,2.
+-opaque client_call() :: #{
+    pid := pid(),
+    stream_id := h2:stream_id(),
+    proto := module(),
+    input := atom(),
+    output := atom(),
+    request_compression := livery_grpc_compression:algorithm(),
+    response_encoding := livery_grpc_compression:algorithm(),
+    buffer := binary(),
+    done := boolean(),
+    outcome := outcome() | undefined
+}.
 
 -define(DEFAULT_TIMEOUT, 30000).
 -define(MAX_RECV, 16 * 1024 * 1024).
@@ -126,7 +142,171 @@ call(Conn, #{kind := server_stream} = Method, Request, Opts) ->
 call(_Conn, #{kind := Kind}, _Request, _Opts) when
     Kind =:= client_stream; Kind =:= bidi
 ->
-    {error, {unimplemented, <<"streaming kind not yet supported">>}}.
+    {error, {use_open, <<"use client_stream/3,4 or open/3 for this kind">>}}.
+
+%%====================================================================
+%% Streaming calls (client-streaming and bidirectional)
+%%====================================================================
+
+-doc "`client_stream/4` with default options.".
+-spec client_stream(conn(), livery_grpc_service:method(), [map() | tuple()]) -> call_result().
+client_stream(Conn, Method, Requests) ->
+    client_stream(Conn, Method, Requests, #{}).
+
+-doc """
+Client-streaming call: send all `Requests`, half-close, and return the
+single reply (`{ok, Reply}`) or the error status.
+""".
+-spec client_stream(conn(), livery_grpc_service:method(), [map() | tuple()], call_opts()) ->
+    call_result().
+client_stream(Conn, Method, Requests, Opts) ->
+    case open(Conn, Method, Opts) of
+        {ok, Call} -> client_stream_run(Call, Requests);
+        {error, _} = E -> E
+    end.
+
+-spec client_stream_run(client_call(), [map() | tuple()]) -> call_result().
+client_stream_run(Call, Requests) ->
+    case send_all(Call, Requests) of
+        ok ->
+            ok = send_end(Call),
+            case drain(Call, []) of
+                {ok, [Reply | _], ok} -> {ok, Reply};
+                {ok, [], ok} -> {ok, #{}};
+                {ok, _Replies, Error} -> {error, Error};
+                {error, _} = E -> E
+            end;
+        {error, _} = E ->
+            E
+    end.
+
+-spec send_all(client_call(), [map() | tuple()]) -> ok | {error, term()}.
+send_all(_Call, []) ->
+    ok;
+send_all(Call, [Msg | Rest]) ->
+    case send(Call, Msg) of
+        ok -> send_all(Call, Rest);
+        {error, _} = E -> E
+    end.
+
+%% Drain replies to end of stream, returning the replies and the outcome.
+-spec drain(client_call(), [map() | tuple()]) ->
+    {ok, [map() | tuple()], outcome()} | {error, term()}.
+drain(Call, Acc) ->
+    case recv(Call) of
+        {ok, Msg, Call1} -> drain(Call1, [Msg | Acc]);
+        {eof, Outcome, _Call1} -> {ok, lists:reverse(Acc), Outcome};
+        {error, Reason, _Call1} -> {error, Reason}
+    end.
+
+-doc "`open/3` with default options.".
+-spec open(conn(), livery_grpc_service:method()) -> {ok, client_call()} | {error, term()}.
+open(Conn, Method) ->
+    open(Conn, Method, #{}).
+
+-doc """
+Open a streaming call. Drive it with `send/2`, `send_end/1` (half-close),
+and `recv/1,2`. Use this for bidirectional calls and for fine-grained
+client-streaming. The connection's events go to the calling process, so
+use the handle from there.
+""".
+-spec open(conn(), livery_grpc_service:method(), call_opts()) ->
+    {ok, client_call()} | {error, term()}.
+open(#{pid := Pid} = Conn, Method, Opts) ->
+    Algorithm = maps:get(compression, Opts, identity),
+    Headers = request_headers(Conn, Method, Algorithm, Opts),
+    case h2:request(Pid, Headers, #{end_stream => false, handler => self()}) of
+        {ok, StreamId} ->
+            #{proto := Proto, input := Input, output := Output} = Method,
+            {ok, #{
+                pid => Pid,
+                stream_id => StreamId,
+                proto => Proto,
+                input => Input,
+                output => Output,
+                request_compression => Algorithm,
+                response_encoding => identity,
+                buffer => <<>>,
+                done => false,
+                outcome => undefined
+            }};
+        {error, _} = E ->
+            E
+    end.
+
+-doc "Send one request message on a streaming call.".
+-spec send(client_call(), map() | tuple()) -> ok | {error, term()}.
+send(#{pid := Pid, stream_id := StreamId, proto := Proto, input := Input} = Call, Msg) ->
+    #{request_compression := Algorithm} = Call,
+    case livery_grpc_wire:encode(Proto, Input, Msg, Algorithm) of
+        {ok, Frame} -> h2:send_data(Pid, StreamId, iolist_to_binary(Frame), false);
+        {error, _} = E -> E
+    end.
+
+-doc "Half-close the send side: no more requests will be sent.".
+-spec send_end(client_call()) -> ok | {error, term()}.
+send_end(#{pid := Pid, stream_id := StreamId}) ->
+    h2:send_data(Pid, StreamId, <<>>, true).
+
+-doc "`recv/2` with the default timeout.".
+-spec recv(client_call()) ->
+    {ok, map() | tuple(), client_call()}
+    | {eof, outcome(), client_call()}
+    | {error, term(), client_call()}.
+recv(Call) ->
+    recv(Call, ?DEFAULT_TIMEOUT).
+
+-doc """
+Receive the next reply on a streaming call: `{ok, Reply, Call}`, `{eof,
+Outcome, Call}` once the server has finished (carrying the gRPC status),
+or `{error, Reason, Call}`.
+""".
+-spec recv(client_call(), timeout()) ->
+    {ok, map() | tuple(), client_call()}
+    | {eof, outcome(), client_call()}
+    | {error, term(), client_call()}.
+recv(#{buffer := Buffer} = Call, Timeout) ->
+    case livery_grpc_frame:decode_one(Buffer, ?MAX_RECV) of
+        {ok, Frame, Rest} -> decode_reply(Frame, Call#{buffer => Rest});
+        {error, Reason} -> {error, Reason, Call};
+        more -> recv_more(Call, Timeout)
+    end.
+
+-spec recv_more(client_call(), timeout()) ->
+    {ok, map() | tuple(), client_call()}
+    | {eof, outcome(), client_call()}
+    | {error, term(), client_call()}.
+recv_more(#{done := true} = Call, _Timeout) ->
+    {eof, call_outcome(Call), Call};
+recv_more(#{pid := Pid, stream_id := StreamId, buffer := Buffer} = Call, Timeout) ->
+    receive
+        {h2, Pid, {response, StreamId, _S, Headers}} ->
+            Call1 = Call#{response_encoding => response_encoding(Headers)},
+            case has_grpc_status(Headers) of
+                true -> recv(Call1#{done => true, outcome => grpc_outcome(Headers)}, Timeout);
+                false -> recv(Call1, Timeout)
+            end;
+        {h2, Pid, {data, StreamId, Data, _Fin}} ->
+            recv(Call#{buffer => <<Buffer/binary, Data/binary>>}, Timeout);
+        {h2, Pid, {trailers, StreamId, Trailers}} ->
+            recv(Call#{done => true, outcome => grpc_outcome(Trailers)}, Timeout);
+        {h2, Pid, {stream_reset, StreamId, Reason}} ->
+            {error, {stream_reset, Reason}, Call}
+    after Timeout ->
+        {error, timeout, Call}
+    end.
+
+-spec decode_reply(livery_grpc_frame:frame(), client_call()) ->
+    {ok, map() | tuple(), client_call()} | {error, term(), client_call()}.
+decode_reply(Frame, #{proto := Proto, output := Output, response_encoding := Encoding} = Call) ->
+    case livery_grpc_wire:decode_frame(Proto, Output, Encoding, Frame) of
+        {ok, Msg} -> {ok, Msg, Call};
+        {error, Reason} -> {error, Reason, Call}
+    end.
+
+-spec call_outcome(client_call()) -> outcome().
+call_outcome(#{outcome := undefined}) -> {unknown, <<"missing grpc-status">>};
+call_outcome(#{outcome := Outcome}) -> Outcome.
 
 %% Send the request message and collect the response, returning the
 %% decoded replies and the gRPC status outcome.

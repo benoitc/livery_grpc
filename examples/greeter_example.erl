@@ -20,7 +20,7 @@ $ grpcurl -plaintext -proto proto/helloworld.proto \\
 """.
 
 %% gRPC service callbacks (one Erlang function per RPC, snake_case).
--export([say_hello/2, say_hello_stream/3]).
+-export([say_hello/2, say_hello_stream/3, say_hello_collect/2, say_hello_chat/2]).
 %% Demo helpers.
 -export([start/1, run/0]).
 
@@ -40,6 +40,24 @@ say_hello_stream(#{name := Name}, Send, _Ctx) ->
         lists:seq(1, 3)
     ),
     ok.
+
+%% Client-streaming: collect all names, reply once.
+say_hello_collect(Stream, _Ctx) ->
+    {ok, Requests, _Stream1} = livery_grpc_stream:recv_all(Stream),
+    Names = [N || #{name := N} <- Requests],
+    {ok, #{message => <<"hello ", (iolist_to_binary(lists:join(<<", ">>, Names)))/binary>>}}.
+
+%% Bidirectional: echo a greeting per request.
+say_hello_chat(Stream, _Ctx) ->
+    case livery_grpc_stream:recv(Stream) of
+        {ok, #{name := Name}, Stream1} ->
+            _ = livery_grpc_stream:send(Stream1, #{message => <<"hi ", Name/binary>>}),
+            say_hello_chat(Stream1, undefined);
+        {eof, _Stream1} ->
+            ok;
+        {error, _Reason, _Stream1} ->
+            {error, internal}
+    end.
 
 %%====================================================================
 %% Demo

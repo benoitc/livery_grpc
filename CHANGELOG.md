@@ -42,3 +42,8 @@ Versioning.
 - Example (`greeter_example`), a quickstart guide, and a `grpcurl` interop
   smoke test (`make interop`) confirming on-the-wire compliance with an
   external gRPC client.
+- Client-streaming and bidirectional streaming on both sides, on h2
+  0.10.0. The server reads requests through a `livery_grpc_stream` handle
+  and interleaves replies in the chunked producer; the client adds
+  `client_stream/3,4` and `open/2,3` + `send/2` + `send_end/1` +
+  `recv/1,2`. All four call types are verified against grpcurl.

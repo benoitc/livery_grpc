@@ -20,8 +20,9 @@ trailers, per the gRPC-over-HTTP/2 spec. A request that fails before
 dispatch (wrong content type, unknown method) gets a Trailers-Only reply:
 a single HEADERS block carrying the status.
 
-This release implements unary and server-streaming. Client-streaming and
-bidirectional dispatch arrive with the h2 bidi support they require.
+All four call kinds are supported. Client-streaming and bidirectional
+read requests through a `livery_grpc_stream` handle and (for bidi) send
+replies through it, interleaved, inside the chunked response producer.
 """.
 
 -export([handler/1, handler/2]).
@@ -116,11 +117,15 @@ serve(Req, #{kind := unary} = Method, Handler, Opts, Mode) ->
     serve_unary(Req, Method, Handler, Opts, Mode);
 serve(Req, #{kind := server_stream} = Method, Handler, Opts, Mode) ->
     serve_server_stream(Req, Method, Handler, Opts, Mode);
+serve(Req, #{kind := client_stream} = Method, Handler, Opts, grpc) ->
+    serve_client_stream(Req, Method, Handler, Opts);
+serve(Req, #{kind := bidi} = Method, Handler, Opts, grpc) ->
+    serve_bidi(Req, Method, Handler, Opts);
 serve(_Req, #{kind := Kind}, _Handler, _Opts, Mode) when
     Kind =:= client_stream; Kind =:= bidi
 ->
-    %% Needs h2 stream takeover; tracked by the h2 bidi contract.
-    error_response(unimplemented, <<"streaming kind not yet supported">>, Mode).
+    %% gRPC-Web has no request streaming; these need full HTTP/2.
+    error_response(unimplemented, <<"client-streaming requires gRPC over HTTP/2">>, Mode).
 
 %%====================================================================
 %% Unary
@@ -143,15 +148,18 @@ serve_unary(Req, Method, Handler, Opts, Mode) ->
 -spec invoke_unary(module(), livery_grpc_service:method(), map() | tuple(), ctx()) ->
     callback_result().
 invoke_unary(Handler, #{function := Fn}, Request, #{deadline := Deadline} = Ctx) ->
-    Run = fun() ->
-        try
-            Handler:Fn(Request, Ctx)
-        catch
-            throw:{grpc_error, Status, Msg} -> {error, {Status, Msg}};
-            Class:Reason:Stack -> {error, {internal, crash_message(Class, Reason, Stack)}}
-        end
-    end,
-    with_deadline(Deadline, Run).
+    with_deadline(Deadline, fun() -> guard_call(fun() -> Handler:Fn(Request, Ctx) end) end).
+
+%% Run a callback, turning a thrown grpc_error or any crash into an error
+%% result with the right gRPC status.
+-spec guard_call(fun(() -> callback_result())) -> callback_result().
+guard_call(Fun) ->
+    try
+        Fun()
+    catch
+        throw:{grpc_error, Status, Msg} -> {error, {Status, Msg}};
+        Class:Reason:Stack -> {error, {internal, crash_message(Class, Reason, Stack)}}
+    end.
 
 %% Enforce a unary call deadline by running the handler in a monitored
 %% child and killing it if the deadline passes. `infinity` runs inline.
@@ -262,12 +270,7 @@ server_stream_response(grpc_web_text, Handler, Method, Request, Ctx, Opts) ->
 ) ->
     ok | {error, term()}.
 invoke_server_stream(Handler, #{function := Fn}, Request, Ctx, SendFun) ->
-    try
-        Handler:Fn(Request, SendFun, Ctx)
-    catch
-        throw:{grpc_error, S, M} -> {error, {S, M}};
-        Class:Reason:Stack -> {error, {internal, crash_message(Class, Reason, Stack)}}
-    end.
+    guard_call(fun() -> Handler:Fn(Request, SendFun, Ctx) end).
 
 %% Run a server-streaming callback, gathering its frames into a list (for
 %% the text variant, which cannot stream).
@@ -288,6 +291,37 @@ drain_frames(Ref, Acc) ->
         {Ref, Frame} -> drain_frames(Ref, [Frame | Acc])
     after 0 -> lists:reverse(Acc)
     end.
+
+%%====================================================================
+%% Client streaming and bidirectional
+%%====================================================================
+
+%% Client-streaming: the callback reads every request via the stream and
+%% returns one reply, so the response is shaped like a unary reply.
+-spec serve_client_stream(
+    livery_req:req(), livery_grpc_service:method(), module(), server_opts()
+) ->
+    livery_resp:resp().
+serve_client_stream(Req, #{function := Fn} = Method, Handler, Opts) ->
+    Stream = livery_grpc_stream:reader(Req, Method),
+    Ctx = ctx(Req, Method),
+    Outcome = guard_call(fun() -> Handler:Fn(Stream, Ctx) end),
+    unary_response(Outcome, Method, Opts, grpc).
+
+%% Bidirectional: the callback reads requests and sends replies through the
+%% stream, interleaved, inside the chunked producer. Its result becomes the
+%% trailers.
+-spec serve_bidi(livery_req:req(), livery_grpc_service:method(), module(), server_opts()) ->
+    livery_resp:resp().
+serve_bidi(Req, #{function := Fn} = Method, Handler, Opts) ->
+    Compression = maps:get(compression, Opts, identity),
+    Producer = fun(Emit) ->
+        Stream = livery_grpc_stream:bidi(Req, Method, Emit, Compression),
+        Ctx = ctx(Req, Method),
+        stash_outcome(guard_call(fun() -> Handler:Fn(Stream, Ctx) end)),
+        ok
+    end,
+    ok_stream(Opts, Producer, deferred).
 
 %%====================================================================
 %% Response builders

@@ -50,6 +50,20 @@ OUT=$(grpcurl -plaintext -proto proto/helloworld.proto \
 echo "$OUT"
 [ "$(echo "$OUT" | grep -c message)" -eq 3 ] || fail "expected 3 stream messages"
 
+echo "== client-streaming =="
+OUT=$(printf '{"name":"a"}\n{"name":"b"}\n{"name":"c"}\n' | \
+  grpcurl -plaintext -proto proto/helloworld.proto \
+  -d @ localhost:${PORT} helloworld.Greeter/SayHelloCollect)
+echo "$OUT"
+echo "$OUT" | grep -q "hello a, b, c" || fail "client-streaming reply"
+
+echo "== bidirectional =="
+OUT=$(printf '{"name":"x"}\n{"name":"y"}\n' | \
+  grpcurl -plaintext -proto proto/helloworld.proto \
+  -d @ localhost:${PORT} helloworld.Greeter/SayHelloChat)
+echo "$OUT"
+[ "$(echo "$OUT" | grep -c message)" -eq 2 ] || fail "expected 2 bidi replies"
+
 echo "== health =="
 OUT=$(grpcurl -plaintext -proto proto/health.proto \
   -d '{"service":""}' localhost:${PORT} grpc.health.v1.Health/Check)
