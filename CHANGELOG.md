@@ -23,3 +23,7 @@ Versioning.
   trailers (and Trailers-Only for pre-dispatch errors). End-to-end tests
   over h2c cover success, error status, handler crash, unknown method,
   and streaming.
+- Client: `livery_grpc_client` calls gRPC services over the h2 client
+  (unary and server-streaming), with metadata and gzip. `livery_grpc_wire`
+  centralises message encode/decode for both sides. In-tree client tests
+  cover unary, error status, server-streaming, and gzip both directions.

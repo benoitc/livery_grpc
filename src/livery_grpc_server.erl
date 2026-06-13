@@ -146,11 +146,11 @@ invoke_unary(Handler, #{function := Fn}, Request, Ctx) ->
 unary_response({ok, Reply}, Method, Opts) ->
     Frame = encode_message(Method, Reply, Opts),
     Producer = fun(Emit) -> Emit(Frame) end,
-    ok_stream(Producer, ok);
-unary_response({error, Status}, _Method, _Opts) when is_atom(Status) ->
-    ok_stream(fun(_Emit) -> ok end, {error, {Status, <<>>}});
-unary_response({error, {Status, Msg}}, _Method, _Opts) ->
-    ok_stream(fun(_Emit) -> ok end, {error, {Status, Msg}}).
+    ok_stream(Opts, Producer, ok);
+unary_response({error, Status}, _Method, Opts) when is_atom(Status) ->
+    ok_stream(Opts, fun(_Emit) -> ok end, {error, {Status, <<>>}});
+unary_response({error, {Status, Msg}}, _Method, Opts) ->
+    ok_stream(Opts, fun(_Emit) -> ok end, {error, {Status, Msg}}).
 
 %%====================================================================
 %% Server streaming
@@ -165,7 +165,7 @@ serve_server_stream(Req, Method, Handler, Opts) ->
         {ok, Request} ->
             Ctx = ctx(Req, Method),
             Producer = server_stream_producer(Handler, Method, Request, Ctx, Opts),
-            ok_stream(Producer, deferred);
+            ok_stream(Opts, Producer, deferred);
         {error, Status, Msg} ->
             trailers_only(Status, Msg)
     end.
@@ -199,10 +199,12 @@ server_stream_producer(Handler, #{function := Fn} = Method, Request, Ctx, Opts) 
 %% frames, then status trailers. `Outcome` is either a concrete result
 %% (`ok` / `{error, _}`) known up front, or `deferred` when the producer
 %% stashes it at runtime (streaming).
--spec ok_stream(fun((term()) -> ok | {error, term()}), ok | deferred | {error, term()}) ->
+-spec ok_stream(
+    server_opts(), fun((term()) -> ok | {error, term()}), ok | deferred | {error, term()}
+) ->
     livery_resp:resp().
-ok_stream(Producer, Outcome) ->
-    Resp = livery_resp:stream(200, base_headers(), Producer),
+ok_stream(Opts, Producer, Outcome) ->
+    Resp = livery_resp:stream(200, response_headers(Opts), Producer),
     livery_resp:with_trailers(trailers_fun(Outcome), Resp).
 
 -spec trailers_fun(ok | deferred | {error, term()}) ->
@@ -239,6 +241,16 @@ unsupported_media_type() ->
 -spec base_headers() -> [{binary(), binary()}].
 base_headers() ->
     [{<<"content-type">>, ?CONTENT_TYPE}].
+
+%% Response headers for a message-bearing reply: advertise the response
+%% encoding when the server compresses. (Honoring the client's
+%% grpc-accept-encoding is a later refinement.)
+-spec response_headers(server_opts()) -> [{binary(), binary()}].
+response_headers(Opts) ->
+    case maps:get(compression, Opts, identity) of
+        identity -> base_headers();
+        gzip -> base_headers() ++ [{<<"grpc-encoding">>, <<"gzip">>}]
+    end.
 
 %%====================================================================
 %% Message coding
@@ -288,25 +300,19 @@ decode_payload(Compressed, Payload, Req, Proto, Input) ->
     Encoding = livery_grpc_compression:from_header(
         livery_req:header(<<"grpc-encoding">>, Req)
     ),
-    try livery_grpc_compression:decompress(Compressed, Encoding, Payload) of
-        Raw ->
-            case livery_grpc_codec:decode(Proto, Input, Raw) of
-                {ok, Msg} -> {ok, Msg};
-                {error, _} -> {error, internal, <<"could not decode request">>}
-            end
-    catch
-        error:{grpc_compression, _} ->
-            {error, internal, <<"bad message compression">>}
+    case livery_grpc_wire:decode_frame(Proto, Input, Encoding, {Compressed, Payload}) of
+        {ok, Msg} -> {ok, Msg};
+        {error, {grpc_compression, _}} -> {error, internal, <<"bad message compression">>};
+        {error, _} -> {error, internal, <<"could not decode request">>}
     end.
 
-%% Encode, compress (identity for now), and frame one reply message.
+%% Encode, compress, and frame one reply message.
 -spec encode_message(livery_grpc_service:method(), map() | tuple(), server_opts()) ->
     iodata().
 encode_message(#{proto := Proto, output := Output}, Reply, Opts) ->
-    {ok, Bin} = livery_grpc_codec:encode(Proto, Output, Reply),
     Algorithm = maps:get(compression, Opts, identity),
-    {Compressed, Bytes} = livery_grpc_compression:compress(Algorithm, Bin),
-    livery_grpc_frame:encode(Bytes, Compressed).
+    {ok, Frame} = livery_grpc_wire:encode(Proto, Output, Reply, Algorithm),
+    Frame.
 
 %%====================================================================
 %% Context and helpers
