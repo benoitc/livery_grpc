@@ -34,16 +34,21 @@ bidirectional dispatch arrive with the h2 bidi support they require.
 -type ctx() :: #{
     metadata := [{binary(), binary()}],
     method := livery_grpc_service:method(),
+    %% The call deadline in milliseconds from grpc-timeout, or `infinity`.
+    deadline := timeout(),
     req := livery_req:req()
 }.
 
 %% A unary callback returns a reply or an error status. A streaming
 %% callback returns `ok` or an error status once it has finished sending.
+%% An error may carry a message and optional binary details (an encoded
+%% google.rpc.Status), surfaced as grpc-status-details-bin.
 -type callback_result() ::
     {ok, map() | tuple()}
     | ok
     | {error, livery_grpc_status:status()}
-    | {error, {livery_grpc_status:status(), binary()}}.
+    | {error, {livery_grpc_status:status(), binary()}}
+    | {error, {livery_grpc_status:status(), binary(), binary()}}.
 
 -type server_opts() :: #{compression => livery_grpc_compression:algorithm()}.
 
@@ -133,12 +138,36 @@ serve_unary(Req, Method, Handler, Opts) ->
 
 -spec invoke_unary(module(), livery_grpc_service:method(), map() | tuple(), ctx()) ->
     callback_result().
-invoke_unary(Handler, #{function := Fn}, Request, Ctx) ->
-    try
-        Handler:Fn(Request, Ctx)
-    catch
-        throw:{grpc_error, Status, Msg} -> {error, {Status, Msg}};
-        Class:Reason:Stack -> {error, {internal, crash_message(Class, Reason, Stack)}}
+invoke_unary(Handler, #{function := Fn}, Request, #{deadline := Deadline} = Ctx) ->
+    Run = fun() ->
+        try
+            Handler:Fn(Request, Ctx)
+        catch
+            throw:{grpc_error, Status, Msg} -> {error, {Status, Msg}};
+            Class:Reason:Stack -> {error, {internal, crash_message(Class, Reason, Stack)}}
+        end
+    end,
+    with_deadline(Deadline, Run).
+
+%% Enforce a unary call deadline by running the handler in a monitored
+%% child and killing it if the deadline passes. `infinity` runs inline.
+-spec with_deadline(timeout(), fun(() -> callback_result())) -> callback_result().
+with_deadline(infinity, Run) ->
+    Run();
+with_deadline(Ms, Run) ->
+    Parent = self(),
+    Ref = make_ref(),
+    {Pid, MRef} = spawn_monitor(fun() -> Parent ! {Ref, Run()} end),
+    receive
+        {Ref, Result} ->
+            erlang:demonitor(MRef, [flush]),
+            Result;
+        {'DOWN', MRef, process, Pid, Reason} ->
+            {error, {internal, reason_bin(Reason)}}
+    after Ms ->
+        erlang:demonitor(MRef, [flush]),
+        exit(Pid, kill),
+        {error, {deadline_exceeded, <<"deadline exceeded">>}}
     end.
 
 -spec unary_response(callback_result(), livery_grpc_service:method(), server_opts()) ->
@@ -149,8 +178,8 @@ unary_response({ok, Reply}, Method, Opts) ->
     ok_stream(Opts, Producer, ok);
 unary_response({error, Status}, _Method, Opts) when is_atom(Status) ->
     ok_stream(Opts, fun(_Emit) -> ok end, {error, {Status, <<>>}});
-unary_response({error, {Status, Msg}}, _Method, Opts) ->
-    ok_stream(Opts, fun(_Emit) -> ok end, {error, {Status, Msg}}).
+unary_response({error, Error}, _Method, Opts) when is_tuple(Error) ->
+    ok_stream(Opts, fun(_Emit) -> ok end, {error, Error}).
 
 %%====================================================================
 %% Server streaming
@@ -221,6 +250,9 @@ outcome_trailers({ok, _Reply}) ->
     livery_grpc_status:trailers(ok);
 outcome_trailers({error, {Status, Msg}}) ->
     livery_grpc_status:trailers(Status, Msg);
+outcome_trailers({error, {Status, Msg, Details}}) ->
+    livery_grpc_status:trailers(Status, Msg) ++
+        [{<<"grpc-status-details-bin">>, base64:encode(Details)}];
 outcome_trailers({error, Status}) when is_atom(Status) ->
     livery_grpc_status:trailers(Status);
 outcome_trailers(_Other) ->
@@ -323,6 +355,7 @@ ctx(Req, Method) ->
     #{
         metadata => metadata(Req),
         method => Method,
+        deadline => livery_grpc_timeout:parse(livery_req:header(<<"grpc-timeout">>, Req)),
         req => Req
     }.
 

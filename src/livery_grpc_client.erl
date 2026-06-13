@@ -32,7 +32,11 @@ need.
 -opaque conn() :: #{pid := pid(), scheme := binary(), authority := binary()}.
 
 -type call_opts() :: #{
+    %% Local receive bound; superseded by `deadline` when that is set.
     timeout => timeout(),
+    %% Call deadline in milliseconds: sent as grpc-timeout and used to
+    %% bound the wait.
+    deadline => pos_integer(),
     metadata => [{binary(), binary()}],
     compression => livery_grpc_compression:algorithm()
 }.
@@ -41,7 +45,15 @@ need.
     {ok, map() | tuple()}
     | {ok, [map() | tuple()]}
     | {error, {livery_grpc_status:status(), binary()}}
+    | {error, {livery_grpc_status:status(), binary(), Details :: binary()}}
     | {error, term()}.
+
+%% The gRPC status outcome of a call: success, or an error status with a
+%% message and optional binary details (grpc-status-details-bin).
+-type outcome() ::
+    ok
+    | {livery_grpc_status:status(), binary()}
+    | {livery_grpc_status:status(), binary(), binary()}.
 
 -define(DEFAULT_TIMEOUT, 30000).
 -define(MAX_RECV, 16 * 1024 * 1024).
@@ -102,13 +114,13 @@ Invoke a method. Unary returns `{ok, Reply}`; server-streaming returns
 call(Conn, #{kind := unary} = Method, Request, Opts) ->
     case invoke(Conn, Method, Request, Opts) of
         {ok, Replies, ok} -> {ok, first(Replies)};
-        {ok, _Replies, {Status, Msg}} -> {error, {Status, Msg}};
+        {ok, _Replies, Error} -> {error, Error};
         {error, _} = E -> E
     end;
 call(Conn, #{kind := server_stream} = Method, Request, Opts) ->
     case invoke(Conn, Method, Request, Opts) of
         {ok, Replies, ok} -> {ok, Replies};
-        {ok, _Replies, {Status, Msg}} -> {error, {Status, Msg}};
+        {ok, _Replies, Error} -> {error, Error};
         {error, _} = E -> E
     end;
 call(_Conn, #{kind := Kind}, _Request, _Opts) when
@@ -119,7 +131,7 @@ call(_Conn, #{kind := Kind}, _Request, _Opts) when
 %% Send the request message and collect the response, returning the
 %% decoded replies and the gRPC status outcome.
 -spec invoke(conn(), livery_grpc_service:method(), map() | tuple(), call_opts()) ->
-    {ok, [map() | tuple()], ok | {livery_grpc_status:status(), binary()}} | {error, term()}.
+    {ok, [map() | tuple()], outcome()} | {error, term()}.
 invoke(#{pid := Pid} = Conn, Method, Request, Opts) ->
     Algorithm = maps:get(compression, Opts, identity),
     #{proto := Proto, input := Input} = Method,
@@ -142,14 +154,22 @@ invoke(#{pid := Pid} = Conn, Method, Request, Opts) ->
 %%====================================================================
 
 -spec await(pid(), h2:stream_id(), livery_grpc_service:method(), call_opts()) ->
-    {ok, [map() | tuple()], ok | {livery_grpc_status:status(), binary()}} | {error, term()}.
+    {ok, [map() | tuple()], outcome()} | {error, term()}.
 await(Pid, StreamId, Method, Opts) ->
-    Timeout = maps:get(timeout, Opts, ?DEFAULT_TIMEOUT),
+    Timeout = effective_timeout(Opts),
     State = #{status => undefined, data => [], encoding => identity},
     collect(Pid, StreamId, Method, Timeout, State).
 
+%% A set deadline bounds the wait (plus slack for the status trailers to
+%% arrive); otherwise the `timeout` option applies.
+-spec effective_timeout(call_opts()) -> timeout().
+effective_timeout(#{deadline := Ms}) when is_integer(Ms) ->
+    Ms + 1000;
+effective_timeout(Opts) ->
+    maps:get(timeout, Opts, ?DEFAULT_TIMEOUT).
+
 -spec collect(pid(), h2:stream_id(), livery_grpc_service:method(), timeout(), map()) ->
-    {ok, [map() | tuple()], ok | {livery_grpc_status:status(), binary()}} | {error, term()}.
+    {ok, [map() | tuple()], outcome()} | {error, term()}.
 collect(Pid, StreamId, Method, Timeout, State) ->
     receive
         {h2, Pid, {response, StreamId, _S, Headers}} ->
@@ -171,7 +191,7 @@ collect(Pid, StreamId, Method, Timeout, State) ->
     end.
 
 -spec finish(livery_grpc_service:method(), map(), [{binary(), binary()}]) ->
-    {ok, [map() | tuple()], ok | {livery_grpc_status:status(), binary()}} | {error, term()}.
+    {ok, [map() | tuple()], outcome()} | {error, term()}.
 finish(#{proto := Proto, output := Output}, #{data := Acc, encoding := Encoding}, StatusHeaders) ->
     Bin = iolist_to_binary(lists:reverse(Acc)),
     case livery_grpc_wire:decode_all(Proto, Output, Encoding, Bin, ?MAX_RECV) of
@@ -198,7 +218,17 @@ request_headers(#{scheme := Scheme, authority := Authority}, #{path := Path}, Al
         {<<"grpc-accept-encoding">>, livery_grpc_compression:accept_header()}
     ],
     WithEncoding = maybe_encoding(Algorithm, Base),
-    WithEncoding ++ maps:get(metadata, Opts, []).
+    WithTimeout = maybe_timeout(Opts, WithEncoding),
+    WithTimeout ++ maps:get(metadata, Opts, []).
+
+-spec maybe_timeout(call_opts(), [{binary(), binary()}]) -> [{binary(), binary()}].
+maybe_timeout(#{deadline := Ms}, Headers) when is_integer(Ms) ->
+    case livery_grpc_timeout:encode(Ms) of
+        undefined -> Headers;
+        Value -> Headers ++ [{<<"grpc-timeout">>, Value}]
+    end;
+maybe_timeout(_Opts, Headers) ->
+    Headers.
 
 -spec maybe_encoding(livery_grpc_compression:algorithm(), [{binary(), binary()}]) ->
     [{binary(), binary()}].
@@ -215,7 +245,10 @@ response_encoding(Headers) ->
 has_grpc_status(Headers) ->
     header(<<"grpc-status">>, Headers) =/= undefined.
 
--spec grpc_outcome([{binary(), binary()}]) -> ok | {livery_grpc_status:status(), binary()}.
+-spec grpc_outcome([{binary(), binary()}]) ->
+    ok
+    | {livery_grpc_status:status(), binary()}
+    | {livery_grpc_status:status(), binary(), binary()}.
 grpc_outcome(Headers) ->
     case header(<<"grpc-status">>, Headers) of
         undefined ->
@@ -223,8 +256,17 @@ grpc_outcome(Headers) ->
         Code ->
             case livery_grpc_status:from_binary(Code) of
                 ok -> ok;
-                Status -> {Status, message(Headers)}
+                Status -> error_outcome(Status, Headers)
             end
+    end.
+
+-spec error_outcome(livery_grpc_status:status(), [{binary(), binary()}]) ->
+    {livery_grpc_status:status(), binary()} | {livery_grpc_status:status(), binary(), binary()}.
+error_outcome(Status, Headers) ->
+    Msg = message(Headers),
+    case header(<<"grpc-status-details-bin">>, Headers) of
+        undefined -> {Status, Msg};
+        Encoded -> {Status, Msg, base64:decode(Encoded)}
     end.
 
 -spec message([{binary(), binary()}]) -> binary().

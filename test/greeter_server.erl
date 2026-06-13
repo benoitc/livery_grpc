@@ -14,6 +14,11 @@ say_hello(#{name := <<"boom">>}, _Ctx) ->
     {error, {invalid_argument, <<"no boom allowed">>}};
 say_hello(#{name := <<"crash">>}, _Ctx) ->
     error(deliberate_crash);
+say_hello(#{name := <<"slow">>}, _Ctx) ->
+    timer:sleep(2000),
+    {ok, #{message => <<"too late">>}};
+say_hello(#{name := <<"details">>}, _Ctx) ->
+    {error, {failed_precondition, <<"needs setup">>, <<"DETAILBYTES">>}};
 say_hello(#{name := Name}, _Ctx) ->
     {ok, #{message => <<"hello ", Name/binary>>}};
 say_hello(_Empty, _Ctx) ->

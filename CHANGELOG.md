@@ -27,3 +27,7 @@ Versioning.
   (unary and server-streaming), with metadata and gzip. `livery_grpc_wire`
   centralises message encode/decode for both sides. In-tree client tests
   cover unary, error status, server-streaming, and gzip both directions.
+- Cross-cutting: `grpc-timeout` deadlines (client sends and bounds the
+  wait; server parses, exposes in the context, and aborts a unary handler
+  that overruns), error details via `grpc-status-details-bin`, request
+  metadata, and livery middleware as gRPC interceptors.
