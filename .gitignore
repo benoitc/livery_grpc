@@ -1,0 +1,12 @@
+.rebar3
+_build/
+/_checkouts/
+*.beam
+erl_crash.dump
+.DS_Store
+/src/*_pb.erl
+/include/*_pb.hrl
+
+# ex_doc output lands in doc/; keep the planning doc, ignore the rest.
+doc/*
+!doc/features.md
