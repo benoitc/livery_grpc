@@ -1,6 +1,6 @@
 {application, livery_grpc, [
     {description, "gRPC for Erlang on the livery HTTP/2 stack: server and client"},
-    {vsn, "0.1.0"},
+    {vsn, "0.1.1"},
     {registered, [livery_grpc_sup]},
     {mod, {livery_grpc_app, []}},
     {applications, [

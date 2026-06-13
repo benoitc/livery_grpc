@@ -6,6 +6,8 @@ Versioning.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-06-13
+
 ### Added
 - Client interop check against a real grpc-go server
   (`make interop-client`, skipped without Go), proving `livery_grpc_client`
