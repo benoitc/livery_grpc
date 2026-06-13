@@ -125,6 +125,35 @@ gzip_roundtrip_test() ->
         livery_grpc:stop_server(Server)
     end.
 
+%% Client interceptor stack: a `before` rewrites the request and an
+%% `after_response` rewrites the reply, composed around the call.
+client_interceptors_test() ->
+    {ok, _} = application:ensure_all_started(livery_grpc),
+    {ok, Server} = livery_grpc:start_server(#{port => 0, services => [?GREETER]}),
+    Port = livery_grpc:server_port(Server),
+    AddName = livery_grpc_client:before(fun(Req) ->
+        livery_grpc_client:set_metadata([{<<"x-trace">>, <<"1">>}], Req#{
+            message => #{name => <<"layered">>}
+        })
+    end),
+    Tag = livery_grpc_client:after_response(fun({ok, #{message := M}}) ->
+        {ok, #{message => <<M/binary, " [seen]">>}}
+    end),
+    try
+        {ok, Conn} = livery_grpc_client:connect("localhost", Port, #{interceptors => [AddName, Tag]}),
+        try
+            {ok, M} = livery_grpc_client:method(helloworld_pb, 'Greeter', 'SayHello'),
+            ?assertEqual(
+                {ok, #{message => <<"hello layered [seen]">>}},
+                livery_grpc_client:call(Conn, M, #{name => <<"ignored">>})
+            )
+        after
+            livery_grpc_client:close(Conn)
+        end
+    after
+        livery_grpc:stop_server(Server)
+    end.
+
 %% A livery middleware runs as a gRPC interceptor: it wraps the handler
 %% and the call still succeeds.
 interceptor_test() ->

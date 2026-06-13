@@ -21,6 +21,13 @@ synchronous: each one drives its stream to completion before returning.
 [Reply]}`). For client-streaming use `client_stream/3,4`; for
 bidirectional (or fine-grained control) use `open/2,3` then `send/2`,
 `send_end/1`, and `recv/1,2`.
+
+Calls compose through an interceptor stack, the outbound twin of livery's
+server middleware (Tower layers on the BEAM). Pass `interceptors` to
+`connect/3` (per connection) or to a call's options (per call); each entry
+is `{Module, State}` or `fun((Request, Next) -> Result)`, the same shape
+as `livery_client` layers. `before/1`, `after_response/1`, and `wrap/1`
+build common ones.
 """.
 
 -export([connect/2, connect/3, close/1]).
@@ -28,10 +35,38 @@ bidirectional (or fine-grained control) use `open/2,3` then `send/2`,
 -export([call/3, call/4]).
 -export([client_stream/3, client_stream/4]).
 -export([open/2, open/3, send/2, send_end/1, recv/1, recv/2]).
+-export([before/1, after_response/1, wrap/1, metadata/1, set_metadata/2]).
 
--export_type([conn/0, call_opts/0, call_result/0, client_call/0, outcome/0]).
+-export_type([
+    conn/0,
+    call_opts/0,
+    call_result/0,
+    client_call/0,
+    outcome/0,
+    grpc_request/0,
+    interceptor/0,
+    interceptors/0,
+    next/0
+]).
 
--opaque conn() :: #{pid := pid(), scheme := binary(), authority := binary()}.
+-opaque conn() :: #{
+    pid := pid(),
+    scheme := binary(),
+    authority := binary(),
+    stack := interceptors()
+}.
+
+%% A request as it flows through the interceptor stack. The same uniform
+%% shape livery's server middleware and livery_client layers use.
+-type grpc_request() :: #{
+    method := livery_grpc_service:method(),
+    message := map() | tuple(),
+    metadata := [{binary(), binary()}],
+    opts := call_opts()
+}.
+-type next() :: fun((grpc_request()) -> call_result()).
+-type interceptor() :: {module(), term()} | fun((grpc_request(), next()) -> call_result()).
+-type interceptors() :: [interceptor()].
 
 -type call_opts() :: #{
     %% Local receive bound; superseded by `deadline` when that is set.
@@ -40,7 +75,9 @@ bidirectional (or fine-grained control) use `open/2,3` then `send/2`,
     %% bound the wait.
     deadline => pos_integer(),
     metadata => [{binary(), binary()}],
-    compression => livery_grpc_compression:algorithm()
+    compression => livery_grpc_compression:algorithm(),
+    %% Per-call interceptors, run inside the connection's stack.
+    interceptors => interceptors()
 }.
 
 -type call_result() ::
@@ -86,7 +123,8 @@ connect(Host, Port) ->
 -doc """
 Open a connection. `Opts`: `transport` (`tcp` for h2c, the default, or
 `ssl`), `authority` (the `:authority` header, derived from host and port
-if absent), `ssl_opts`, `timeout`.
+if absent), `ssl_opts`, `timeout`, and `interceptors` (a layer stack run
+around every unary and server-streaming call on this connection).
 """.
 -spec connect(string(), inet:port_number(), map()) -> {ok, conn()} | {error, term()}.
 connect(Host, Port, Opts) ->
@@ -96,11 +134,15 @@ connect(Host, Port, Opts) ->
             {ok, #{
                 pid => Pid,
                 scheme => scheme(Transport),
-                authority => authority(Host, Port, Opts)
+                authority => authority(Host, Port, Opts),
+                stack => maps:get(interceptors, Opts, [])
             }};
         {error, _} = E ->
             E
     end.
+
+-spec stack(conn()) -> interceptors().
+stack(#{stack := Stack}) -> Stack.
 
 -doc "Close a connection.".
 -spec close(conn()) -> ok.
@@ -125,24 +167,93 @@ call(Conn, Method, Request) ->
 -doc """
 Invoke a method. Unary returns `{ok, Reply}`; server-streaming returns
 `{ok, [Reply]}`. A non-OK gRPC status is `{error, {Status, Message}}`.
+
+The call runs through the connection's interceptor stack (plus any
+per-call `interceptors`), the gRPC analogue of livery's server middleware
+and `livery_client` layers: each interceptor is
+`call(Request, Next, State)` and may rewrite the request, observe the
+result, or short-circuit, with errors threaded as values.
 """.
 -spec call(conn(), livery_grpc_service:method(), map() | tuple(), call_opts()) -> call_result().
-call(Conn, #{kind := unary} = Method, Request, Opts) ->
-    case invoke(Conn, Method, Request, Opts) of
-        {ok, Replies, ok} -> {ok, first(Replies)};
-        {ok, _Replies, Error} -> {error, Error};
-        {error, _} = E -> E
-    end;
-call(Conn, #{kind := server_stream} = Method, Request, Opts) ->
-    case invoke(Conn, Method, Request, Opts) of
-        {ok, Replies, ok} -> {ok, Replies};
-        {ok, _Replies, Error} -> {error, Error};
-        {error, _} = E -> E
-    end;
+call(Conn, #{kind := Kind} = Method, Request, Opts) when
+    Kind =:= unary; Kind =:= server_stream
+->
+    Stack = stack(Conn) ++ maps:get(interceptors, Opts, []),
+    GReq = #{
+        method => Method,
+        message => Request,
+        metadata => maps:get(metadata, Opts, []),
+        opts => Opts
+    },
+    run_stack(Stack, fun(R) -> transport_call(Conn, R) end, GReq);
 call(_Conn, #{kind := Kind}, _Request, _Opts) when
     Kind =:= client_stream; Kind =:= bidi
 ->
     {error, {use_open, <<"use client_stream/3,4 or open/3 for this kind">>}}.
+
+%% The innermost handler: perform the unary/server-streaming call on the
+%% wire and shape the result by kind. Interceptors may have rewritten the
+%% request's metadata, so fold it back into the opts the transport uses.
+-spec transport_call(conn(), grpc_request()) -> call_result().
+transport_call(Conn, #{method := #{kind := Kind} = Method, message := Msg} = GReq) ->
+    Opts = (maps:get(opts, GReq))#{metadata => maps:get(metadata, GReq)},
+    case invoke(Conn, Method, Msg, Opts) of
+        {ok, Replies, ok} when Kind =:= unary -> {ok, first(Replies)};
+        {ok, Replies, ok} -> {ok, Replies};
+        {ok, _Replies, Error} -> {error, Error};
+        {error, _} = E -> E
+    end.
+
+%%====================================================================
+%% Interceptor stack (the gRPC analogue of livery_client layers)
+%%====================================================================
+
+-spec run_stack(interceptors(), next(), grpc_request()) -> call_result().
+run_stack([], Handler, Req) ->
+    Handler(Req);
+run_stack([Entry | Rest], Handler, Req) ->
+    Next = fun(R) -> run_stack(Rest, Handler, R) end,
+    call_entry(Entry, Req, Next).
+
+-spec call_entry(interceptor(), grpc_request(), next()) -> call_result().
+call_entry({Mod, State}, Req, Next) when is_atom(Mod) ->
+    Mod:call(Req, Next, State);
+call_entry(Fun, Req, Next) when is_function(Fun, 2) ->
+    Fun(Req, Next).
+
+-doc "Lift a request transformer into an interceptor.".
+-spec before(fun((grpc_request()) -> grpc_request())) -> interceptor().
+before(Fun) when is_function(Fun, 1) ->
+    fun(Req, Next) -> Next(Fun(Req)) end.
+
+-doc "Lift a result transformer (applied on success) into an interceptor.".
+-spec after_response(fun((call_result()) -> call_result())) -> interceptor().
+after_response(Fun) when is_function(Fun, 1) ->
+    fun(Req, Next) ->
+        case Next(Req) of
+            {ok, _} = Ok -> Fun(Ok);
+            Other -> Other
+        end
+    end.
+
+-doc "Wrap a call to catch exceptions, mirroring `livery_client:wrap/1`.".
+-spec wrap(fun((throw | error | exit, term(), list()) -> call_result())) -> interceptor().
+wrap(Fun) when is_function(Fun, 3) ->
+    fun(Req, Next) ->
+        try
+            Next(Req)
+        catch
+            Class:Reason:Stack -> Fun(Class, Reason, Stack)
+        end
+    end.
+
+-doc "The request's call metadata (for use inside an interceptor).".
+-spec metadata(grpc_request()) -> [{binary(), binary()}].
+metadata(#{metadata := Md}) -> Md.
+
+-doc "Add or replace call metadata on a request (for use in a `before`).".
+-spec set_metadata([{binary(), binary()}], grpc_request()) -> grpc_request().
+set_metadata(Md, Req) -> Req#{metadata => Md}.
 
 %%====================================================================
 %% Streaming calls (client-streaming and bidirectional)

@@ -76,6 +76,22 @@ ok = livery_grpc_client:close(Conn).
 Per-call options: `deadline` (ms, sent as `grpc-timeout`), `metadata`
 (extra headers), `compression`.
 
+### Interceptors (Tower-style layers)
+
+Both sides are composable in the livery (Axum + Tower) spirit. On the
+server, `middleware => Stack` runs livery middleware around every call. On
+the client, `interceptors` compose layers around unary and
+server-streaming calls, the same `call(Request, Next, State)` shape as
+`livery_client`:
+
+```erlang
+Trace = livery_grpc_client:before(fun(Req) ->
+    livery_grpc_client:set_metadata([{<<"x-trace-id">>, new_id()}], Req)
+end),
+{ok, Conn} = livery_grpc_client:connect("localhost", 50051,
+                                        #{interceptors => [Trace]}).
+```
+
 ## 5. Talk to it with grpcurl
 
 ```

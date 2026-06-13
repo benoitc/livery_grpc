@@ -47,3 +47,7 @@ Versioning.
   and interleaves replies in the chunked producer; the client adds
   `client_stream/3,4` and `open/2,3` + `send/2` + `send_end/1` +
   `recv/1,2`. All four call types are verified against grpcurl.
+- Client interceptor stack, the outbound twin of livery's server
+  middleware: `interceptors` on `connect/3` or per call, with `before/1`,
+  `after_response/1`, and `wrap/1`, matching the `livery_client` layer
+  shape (Tower layers on the BEAM).
