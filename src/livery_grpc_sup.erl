@@ -2,9 +2,9 @@
 -moduledoc """
 Top-level supervisor for `livery_grpc`.
 
-Supervises the health status store. gRPC servers (each a dedicated livery
-h2 listener) are started via `livery_grpc:start_server/1` and own their own
-listener supervision tree.
+Supervises the health status store and the dynamic server supervisor;
+gRPC servers started via `livery_grpc:start_server/1` are children of the
+latter, so each server outlives the process that started it.
 """.
 -behaviour(supervisor).
 
@@ -26,6 +26,14 @@ init([]) ->
             shutdown => 5000,
             type => worker,
             modules => [livery_grpc_health_store]
+        },
+        #{
+            id => livery_grpc_server_sup,
+            start => {livery_grpc_server_sup, start_link, []},
+            restart => permanent,
+            shutdown => infinity,
+            type => supervisor,
+            modules => [livery_grpc_server_sup]
         }
     ],
     {ok, {SupFlags, Children}}.

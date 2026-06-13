@@ -61,3 +61,14 @@ Versioning.
 - Code generation (`livery_grpc_codegen`, `make stubs`): per service, an
   `erpc`-style client stub (`greeter_client:say_hello/2`) and a service
   behaviour (`-behaviour(greeter_service)`) for compiler-checked handlers.
+
+### Changed
+- Servers are now owned by a supervised process (`livery_grpc_listener`
+  under `livery_grpc_server_sup`) instead of the caller, so a server
+  started from a short-lived process keeps running. `start_server/1`
+  returns the listener owner pid.
+
+### Added (testing)
+- `livery_grpc_e2e_SUITE`, a Common Test end-to-end suite against a real
+  running server: the full journey with the in-tree client, and the same
+  calls driven by grpcurl over reflection (skipped if grpcurl is absent).

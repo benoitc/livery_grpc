@@ -30,7 +30,8 @@ message and a context (see `livery_grpc_server:ctx/0`).
 
 -export_type([server/0, service_spec/0, server_opts/0]).
 
--type server() :: livery_h2:listener().
+%% The owner pid of a running server's listener (a supervised process).
+-type server() :: pid().
 
 -type service_spec() :: #{
     proto := module(),
@@ -70,7 +71,9 @@ start_server(Opts) when is_map(Opts) ->
     Services = registrations(Opts),
     Index = livery_grpc_service:index(Services),
     Handler = livery_grpc_server:handler(Index, server_config(Opts, Services)),
-    livery_h2:start(h2_opts(Opts, Handler)).
+    %% The listener is owned by a supervised process so it outlives the
+    %% caller (the h2 listen socket is owned by whoever opens it).
+    livery_grpc_server_sup:start_server(#{h2_opts => h2_opts(Opts, Handler)}).
 
 %% The service list, with the reflection service appended when reflection
 %% is enabled.
@@ -85,12 +88,13 @@ registrations(Opts) ->
 -doc "Stop a gRPC server.".
 -spec stop_server(server()) -> ok.
 stop_server(Server) ->
-    livery_h2:stop(Server).
+    _ = livery_grpc_server_sup:stop_server(Server),
+    ok.
 
 -doc "The TCP port a running server is bound to.".
 -spec server_port(server()) -> inet:port_number().
 server_port(Server) ->
-    h2:server_port(Server).
+    livery_grpc_listener:port(Server).
 
 %%====================================================================
 %% Internals

@@ -41,7 +41,11 @@ src/livery_grpc_web.erl     gRPC-Web framing (binary + text)
 src/livery_grpc_reflection  grpc.reflection.v1 service (bidi)
 src/livery_grpc_health.erl  grpc.health.v1 service (Check + Watch)
 src/livery_grpc_health_store gen_server: status + watch subscriptions
-src/livery_grpc_app.erl / _sup.erl   application + supervisor (health store)
+src/livery_grpc_listener.erl gen_server owning one h2 listener (so it
+                            outlives the caller); supervised by
+src/livery_grpc_server_sup  dynamic supervisor of running servers
+src/livery_grpc_app.erl / _sup.erl   application + supervisor (health store,
+                            server supervisor)
 ```
 
 ## Required checks
@@ -55,8 +59,11 @@ rebar3 lint         # elvis
 rebar3 xref         # cross-reference analysis
 rebar3 dialyzer     # type checking
 rebar3 eunit        # unit + property tests
-rebar3 ct           # Common Test (once server/client land)
+rebar3 ct           # Common Test: livery_grpc_e2e_SUITE (real server)
 ```
+
+`make interop` runs grpcurl against a real server out of band; the same
+checks also run inside `livery_grpc_e2e_SUITE`'s grpcurl group.
 
 `make check` runs the offline gate (compile, xref, dialyzer, lint, fmt,
 eunit). `warn_missing_spec` is deliberately not enabled: gpb-generated
