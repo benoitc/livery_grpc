@@ -33,20 +33,26 @@ The generated module name is the proto file name plus the
 compiles to `helloworld_pb`, and `route_guide.proto` to `route_guide_pb`.
 The file name sets the module; the `package` line does not.
 
-When you call livery_grpc you pass three things from the proto:
+For the `helloworld.proto` above:
 
-- the generated **module** (`helloworld_pb`),
-- the **service** name as an atom, exactly as written in the proto
-  (`service Greeter` is `'Greeter'`, `service RouteGuide` is
-  `'RouteGuide'`),
-- the **method** name as an atom (`'SayHello'`).
+| In the proto | In Erlang |
+| --- | --- |
+| file `helloworld.proto` | module `helloworld_pb` |
+| `service Greeter` | service atom `'Greeter'` |
+| `rpc SayHello(...)` | method atom `'SayHello'` |
+| `message HelloRequest` | a map `#{name => _}` |
+
+So you name a method with the generated module and the proto's service and
+method atoms:
 
 ```erlang
 {ok, Method} = livery_grpc_client:method(helloworld_pb, 'Greeter', 'SayHello').
 ```
 
 The wire path is built from the package and these names:
-`/helloworld.Greeter/SayHello`.
+`/helloworld.Greeter/SayHello`. For the rebar3 and `gpb_opts` setup that
+produces the module, see the
+[Erlang integration guide](guides/erlang-integration.md).
 
 ## The four call types
 

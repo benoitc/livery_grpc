@@ -7,24 +7,24 @@ architecture behind it, see [Design](../design.md).
 
 ## Add the dependency
 
-In `rebar.config`:
+Here is a complete `rebar.config` for a project that serves gRPC. Each
+block is explained below.
 
 ```erlang
 {deps, [
     {livery_grpc, "0.1.0"}
 ]}.
-```
 
-livery_grpc pulls in `livery` and `gpb`. Add the build plugin and point it
-at your protos:
-
-```erlang
+%% The build plugin that compiles your .proto files.
 {plugins, [{rebar3_gpb_plugin, "3.0.1"}]}.
 
+%% How protos are compiled. `i` is the input directory, `o_erl` is where
+%% the generated modules go, and `module_name_suffix` is appended to each
+%% proto file's name to form its module name (see below).
 {gpb_opts, [
     {i, "proto"},
-    {module_name_suffix, "_pb"},
     {o_erl, "src"},
+    {module_name_suffix, "_pb"},
     {strings_as_binaries, true},
     {maps, true},
     {maps_unset_optional, omitted},
@@ -32,17 +32,41 @@ at your protos:
     descriptor            %% needed only if you enable reflection
 ]}.
 
+%% Run the proto compile before each erlc compile, and clean it too.
 {provider_hooks, [
     {pre, [{compile, {protobuf, compile}}, {clean, {protobuf, clean}}]}
 ]}.
 ```
 
-## Lay out your protos
+`livery_grpc` pulls in `livery` and `gpb` for you. Run `rebar3 compile`;
+the plugin compiles the protos first.
 
-Put `.proto` files in `proto/`. `rebar3 compile` generates one `*_pb`
-module per file (here into `src/`). Messages are maps. Keep the generated
-`*_pb` modules out of strict style checks: a generated module is not
-hand-written.
+## Protos and the generated module
+
+Put `.proto` files in `proto/`. Each file compiles to one Erlang module,
+and **the module name is the proto file's name plus the
+`module_name_suffix`** (`_pb` by convention). The file name decides the
+module name; the `package` declaration does not.
+
+| In the proto | In Erlang |
+| --- | --- |
+| file `proto/route_guide.proto` | module `route_guide_pb` (in `src/`) |
+| `package routeguide;` | part of the wire path, not the module name |
+| `service RouteGuide { ... }` | service atom `'RouteGuide'` |
+| `rpc GetFeature(...)` | method atom `'GetFeature'` |
+| `message Point { ... }` | a map `#{latitude => _, longitude => _}` |
+
+So you call a method by naming the generated module and the proto's
+service and method atoms:
+
+```erlang
+{ok, Method} = livery_grpc_client:method(route_guide_pb, 'RouteGuide', 'GetFeature'),
+{ok, Reply}  = livery_grpc_client:call(Conn, Method, #{latitude => 1, longitude => 1}).
+```
+
+The generated `*_pb` modules are not hand-written, so keep them out of
+strict style checks (elvis, erlfmt, xref) the way you would any generated
+code.
 
 ## Implement a service
 
