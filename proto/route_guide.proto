@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+// A trimmed RouteGuide, the canonical gRPC example. It uses all four call
+// types, so it doubles as the reference example for livery_grpc.
+package routeguide;
+
+service RouteGuide {
+  // Unary: the feature at a point (empty name if none).
+  rpc GetFeature(Point) returns (Feature);
+  // Server-streaming: every feature within a rectangle.
+  rpc ListFeatures(Rectangle) returns (stream Feature);
+  // Client-streaming: a route of points in, one summary out.
+  rpc RecordRoute(stream Point) returns (RouteSummary);
+  // Bidirectional: notes in; prior notes at the same point streamed back.
+  rpc RouteChat(stream RouteNote) returns (stream RouteNote);
+}
+
+message Point {
+  int32 latitude = 1;
+  int32 longitude = 2;
+}
+
+message Rectangle {
+  Point lo = 1;
+  Point hi = 2;
+}
+
+message Feature {
+  string name = 1;
+  Point location = 2;
+}
+
+message RouteNote {
+  Point location = 1;
+  string message = 2;
+}
+
+message RouteSummary {
+  int32 point_count = 1;
+  int32 feature_count = 2;
+  int32 distance = 3;
+}

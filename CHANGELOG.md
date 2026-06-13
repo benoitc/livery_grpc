@@ -72,3 +72,16 @@ Versioning.
 - `livery_grpc_e2e_SUITE`, a Common Test end-to-end suite against a real
   running server: the full journey with the in-tree client, and the same
   calls driven by grpcurl over reflection (skipped if grpcurl is absent).
+
+### Added (docs and example)
+- A documentation set in the style of grpc.io with Erlang snippets:
+  Introduction, Core concepts, Getting started, a Basics tutorial built on
+  a real RouteGuide example, a Design guide for the Erlang integration, an
+  Erlang-integration how-to, and task-oriented guides modeled on the gRPC
+  guides (streaming, metadata, interceptors, deadlines, cancellation,
+  error handling, status codes, compression, authentication, health,
+  reflection, retry, graceful shutdown, flow control, wait-for-ready,
+  gRPC-Web, generated stubs, testing). All wired into ex_doc.
+- `examples/route_guide.erl` + `proto/route_guide.proto`: the RouteGuide
+  example, exercising all four call types, with an eunit suite.
+- `livery_grpc_client:cancel/1` cancels a streaming call.

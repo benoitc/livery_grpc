@@ -34,7 +34,7 @@ build common ones.
 -export([method/3]).
 -export([call/3, call/4]).
 -export([client_stream/3, client_stream/4]).
--export([open/2, open/3, send/2, send_end/1, recv/1, recv/2]).
+-export([open/2, open/3, send/2, send_end/1, recv/1, recv/2, cancel/1]).
 -export([before/1, after_response/1, wrap/1, metadata/1, set_metadata/2]).
 
 -export_type([
@@ -358,6 +358,15 @@ send(#{pid := Pid, stream_id := StreamId, proto := Proto, input := Input} = Call
 -spec send_end(client_call()) -> ok | {error, term()}.
 send_end(#{pid := Pid, stream_id := StreamId}) ->
     h2:send_data(Pid, StreamId, <<>>, true).
+
+-doc """
+Cancel a streaming call, resetting its stream (the server sees a
+disconnect). Use this to stop a stream early; unary calls are bounded by
+their `deadline` instead.
+""".
+-spec cancel(client_call()) -> ok | {error, term()}.
+cancel(#{pid := Pid, stream_id := StreamId}) ->
+    h2:cancel(Pid, StreamId).
 
 -doc "`recv/2` with the default timeout.".
 -spec recv(client_call()) ->

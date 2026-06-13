@@ -4,8 +4,10 @@ gRPC for Erlang, built on the [livery](https://github.com/benoitc/livery)
 HTTP/2 stack. Server side and client side. You write plain Erlang; the
 gRPC wire format is generated from your `.proto` files and handled for you.
 
-See `docs/quickstart.md` to build and call a service, and
-`doc/features.md` for the plan.
+See `docs/getting-started.md` to build and call a service, the
+[basics tutorial](docs/basics-tutorial.md) for a full RouteGuide example,
+and `doc/features.md` for the plan. livery_grpc is a companion to
+[livery](https://github.com/benoitc/livery).
 
 Working today: all four call types (unary, server-streaming,
 client-streaming, bidirectional) on both the server and client, deadlines,
