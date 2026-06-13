@@ -37,7 +37,7 @@ literally; everything else is `%`-escaped).
 
 -type code() :: 0..16.
 
--define(is_hex(C),
+-define(IS_HEX(C),
     ((C >= $0 andalso C =< $9) orelse
         (C >= $a andalso C =< $f) orelse
         (C >= $A andalso C =< $F))
@@ -149,7 +149,7 @@ decode_message(Bin) ->
     decode_message(Bin, <<>>).
 
 -spec decode_message(binary(), binary()) -> binary().
-decode_message(<<$%, H, L, Rest/binary>>, Acc) when ?is_hex(H), ?is_hex(L) ->
+decode_message(<<$%, H, L, Rest/binary>>, Acc) when ?IS_HEX(H), ?IS_HEX(L) ->
     Byte = (unhex(H) bsl 4) bor unhex(L),
     decode_message(Rest, <<Acc/binary, Byte>>);
 decode_message(<<B, Rest/binary>>, Acc) ->

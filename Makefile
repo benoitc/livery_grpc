@@ -3,9 +3,9 @@
 compile:
 	rebar3 compile
 
-## Regenerate the *_pb.erl modules from proto/ without a full build.
+## Regenerate the fixture *_pb.erl from proto/ (test profile).
 proto:
-	rebar3 protobuf compile
+	rebar3 as test protobuf compile
 
 eunit:
 	rebar3 eunit

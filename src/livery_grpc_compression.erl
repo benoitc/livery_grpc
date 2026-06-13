@@ -11,7 +11,7 @@ payload went through `compress/2`; `identity` always leaves the flag
 clear.
 """.
 
--export([compress/2, decompress/2]).
+-export([compress/2, decompress/3]).
 -export([is_supported/1, from_header/1, accept_header/0]).
 
 -export_type([algorithm/0]).
@@ -32,15 +32,17 @@ compress(gzip, Bin) ->
 Decompress a payload given the frame's compressed flag and the message
 encoding. A clear flag means the payload is identity-coded regardless of
 the negotiated algorithm (per the gRPC spec, the flag wins per message).
+
+A set flag with an `identity` encoding is malformed and raises
+`{grpc_compression, flag_set_for_identity}`.
 """.
--spec decompress(boolean(), algorithm()) -> fun((binary()) -> binary()).
-decompress(false, _Algorithm) ->
-    fun(Bin) -> Bin end;
-decompress(true, gzip) ->
-    fun(Bin) -> zlib:gunzip(Bin) end;
-decompress(true, identity) ->
-    %% Compressed flag set but the message declared identity: malformed.
-    fun(_Bin) -> error({grpc_compression, flag_set_for_identity}) end.
+-spec decompress(boolean(), algorithm(), binary()) -> binary().
+decompress(false, _Algorithm, Bin) ->
+    Bin;
+decompress(true, gzip, Bin) ->
+    zlib:gunzip(Bin);
+decompress(true, identity, _Bin) ->
+    error({grpc_compression, flag_set_for_identity}).
 
 -doc "Whether an algorithm atom is supported.".
 -spec is_supported(algorithm() | term()) -> boolean().

@@ -16,8 +16,10 @@ streaming, so both sides of gRPC run on it natively. Hackney is not used
 (it cannot send request trailers or do bidi).
 
 ```
-proto/                     .proto sources, compiled to src/*_pb.erl by
-                           rebar3_gpb_plugin (gpb, maps mode) at build time
+proto/                     .proto fixtures (helloworld), compiled to
+                           src/*_pb.erl by rebar3_gpb_plugin (gpb, maps
+                           mode); generated *_pb modules are excluded from
+                           erlfmt, elvis, and xref
 src/livery_grpc.erl        Public facade: dedicated gRPC listener
                            (start_link/start_server) + server/client entry
 src/livery_grpc_frame.erl  Length-prefixed framing + streaming decoder
@@ -28,13 +30,27 @@ src/livery_grpc_client.erl Call services over the h2 client (erpc-like)
 src/livery_grpc_app.erl / _sup.erl   application + supervisor
 ```
 
-## Build and checks
+## Required checks
 
-- `make compile` builds (runs the proto step first).
-- `make check` is the offline gate: compile, xref, dialyzer, lint, fmt,
-  eunit.
-- `livery` is consumed from `_checkouts/livery` (a symlink to the sibling
-  checkout) until it is published to hex.
+Every change must be formatted and pass all checks before committing:
+
+```bash
+rebar3 fmt          # auto-format (always run first)
+rebar3 compile      # must compile cleanly (warnings_as_errors)
+rebar3 lint         # elvis
+rebar3 xref         # cross-reference analysis
+rebar3 dialyzer     # type checking
+rebar3 eunit        # unit + property tests
+rebar3 ct           # Common Test (once server/client land)
+```
+
+`make check` runs the offline gate (compile, xref, dialyzer, lint, fmt,
+eunit). `warn_missing_spec` is deliberately not enabled: gpb-generated
+modules cannot satisfy it. Hand-written modules carry specs; dialyzer
+enforces types.
+
+`livery` is consumed from `_checkouts/livery` (a symlink to the sibling
+checkout) until it is published to hex.
 
 ## Conventions
 

@@ -4,6 +4,7 @@ _build/
 *.beam
 erl_crash.dump
 .DS_Store
+# Generated protobuf modules (rebar3_gpb_plugin output).
 /src/*_pb.erl
 /include/*_pb.hrl
 
