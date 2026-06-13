@@ -1,4 +1,4 @@
-.PHONY: compile proto stubs eunit ct test interop dialyzer xref lint fmt check clean
+.PHONY: compile proto stubs eunit ct test interop interop-client dialyzer xref lint fmt check clean
 
 compile:
 	rebar3 compile
@@ -23,10 +23,15 @@ ct:
 
 test: eunit ct
 
-## External compliance: drive a running server with grpcurl. Skipped if
-## grpcurl is not installed.
+## External compliance: drive our server with grpcurl (an external client).
+## Skipped if grpcurl is not installed.
 interop:
 	./test/interop/grpcurl_smoke.sh
+
+## Client interop: drive a real grpc-go server with our client. Skipped if
+## Go is not installed.
+interop-client:
+	./test/interop/client_interop.sh
 
 dialyzer:
 	rebar3 dialyzer

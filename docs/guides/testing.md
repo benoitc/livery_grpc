@@ -56,6 +56,24 @@ $ grpcurl -plaintext -d '{"name":"ada"}' localhost:50051 greeter.Greeter/SayHell
 `make interop` in livery_grpc runs a grpcurl smoke test against a running
 server and is skipped if grpcurl is not installed.
 
+## Client interop with non-Erlang servers
+
+The client speaks standard gRPC, so it calls servers written in any
+language. `make interop-client` proves this: it starts a real grpc-go
+server (using grpc-go's built-in `grpc.health.v1` service, which the
+shipped `health_pb` matches) and drives it with `livery_grpc_client` for a
+unary `Check` and a server-streaming `Watch`. It is skipped if Go is not
+installed.
+
+To call your own external service, generate the `_pb` module from its
+`.proto` and use the client as usual:
+
+```erlang
+{ok, Conn} = livery_grpc_client:connect("api.example.com", 443, #{transport => ssl}),
+{ok, M}    = livery_grpc_client:method(their_service_pb, 'TheirService', 'TheirMethod'),
+{ok, Reply} = livery_grpc_client:call(Conn, M, Request).
+```
+
 ## See also
 
 - [Getting started](../getting-started.md), [Reflection](reflection.md).

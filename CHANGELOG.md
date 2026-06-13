@@ -6,6 +6,12 @@ Versioning.
 
 ## [Unreleased]
 
+### Added
+- Client interop check against a real grpc-go server
+  (`make interop-client`, skipped without Go), proving `livery_grpc_client`
+  calls services that are not written in Erlang (unary and
+  server-streaming over the standard health service).
+
 ### Fixed
 - A request message compressed with an unsupported `grpc-encoding` now
   returns `unimplemented` (as the gRPC spec requires) instead of
