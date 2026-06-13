@@ -55,3 +55,6 @@ Versioning.
   true` and tools like grpcurl discover services and message schemas at
   runtime, with no local `.proto`. Verified with grpcurl `list`,
   `describe`, and a fully reflective call.
+- Health `Watch` now streams live updates: it emits the current status and
+  a new message on every change until the client disconnects, backed by a
+  small subscription store (`livery_grpc_health_store`).
