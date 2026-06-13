@@ -35,3 +35,7 @@ Versioning.
   (`livery_grpc_health:service/0`), with per-service serving status.
   `Check` is unary; `Watch` emits the current status once (live updates
   follow the bidirectional work).
+- gRPC-Web: `livery_grpc_web` framing on the same server (binary and
+  text), with the status delivered as an in-body trailer frame. Unary and
+  server-streaming. Reflection is deferred: its RPC is bidirectional and
+  waits on the h2 bidi work.

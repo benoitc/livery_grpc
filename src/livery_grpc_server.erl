@@ -90,50 +90,54 @@ dispatch(Req, Index, Opts) ->
             dispatch_post(Req, Index, Opts);
         _ ->
             %% gRPC is POST-only; anything else is not a gRPC call.
-            trailers_only(unimplemented, <<"method must be POST">>)
+            error_response(unimplemented, <<"method must be POST">>, grpc)
     end.
 
 -spec dispatch_post(livery_req:req(), map(), server_opts()) -> livery_resp:resp().
 dispatch_post(Req, Index, Opts) ->
     Ct = livery_req:header(<<"content-type">>, Req),
-    case livery_grpc_codec:is_grpc_content_type(Ct) of
-        false ->
+    case livery_grpc_web:mode(Ct) of
+        undefined ->
             unsupported_media_type();
-        true ->
+        Mode ->
             case maps:find(livery_req:path(Req), Index) of
                 {ok, {Method, Handler}} ->
-                    serve(Req, Method, Handler, Opts);
+                    serve(Req, Method, Handler, Opts, Mode);
                 error ->
-                    trailers_only(unimplemented, <<"unknown method">>)
+                    error_response(unimplemented, <<"unknown method">>, Mode)
             end
     end.
 
--spec serve(livery_req:req(), livery_grpc_service:method(), module(), server_opts()) ->
+-spec serve(
+    livery_req:req(), livery_grpc_service:method(), module(), server_opts(), livery_grpc_web:mode()
+) ->
     livery_resp:resp().
-serve(Req, #{kind := unary} = Method, Handler, Opts) ->
-    serve_unary(Req, Method, Handler, Opts);
-serve(Req, #{kind := server_stream} = Method, Handler, Opts) ->
-    serve_server_stream(Req, Method, Handler, Opts);
-serve(_Req, #{kind := Kind}, _Handler, _Opts) when
+serve(Req, #{kind := unary} = Method, Handler, Opts, Mode) ->
+    serve_unary(Req, Method, Handler, Opts, Mode);
+serve(Req, #{kind := server_stream} = Method, Handler, Opts, Mode) ->
+    serve_server_stream(Req, Method, Handler, Opts, Mode);
+serve(_Req, #{kind := Kind}, _Handler, _Opts, Mode) when
     Kind =:= client_stream; Kind =:= bidi
 ->
     %% Needs h2 stream takeover; tracked by the h2 bidi contract.
-    trailers_only(unimplemented, <<"streaming kind not yet supported">>).
+    error_response(unimplemented, <<"streaming kind not yet supported">>, Mode).
 
 %%====================================================================
 %% Unary
 %%====================================================================
 
--spec serve_unary(livery_req:req(), livery_grpc_service:method(), module(), server_opts()) ->
+-spec serve_unary(
+    livery_req:req(), livery_grpc_service:method(), module(), server_opts(), livery_grpc_web:mode()
+) ->
     livery_resp:resp().
-serve_unary(Req, Method, Handler, Opts) ->
-    case read_request_message(Req, Method) of
+serve_unary(Req, Method, Handler, Opts, Mode) ->
+    case read_request_message(Req, Method, Mode) of
         {ok, Request} ->
             Ctx = ctx(Req, Method),
             Outcome = invoke_unary(Handler, Method, Request, Ctx),
-            unary_response(Outcome, Method, Opts);
+            unary_response(Outcome, Method, Opts, Mode);
         {error, Status, Msg} ->
-            trailers_only(Status, Msg)
+            error_response(Status, Msg, Mode)
     end.
 
 -spec invoke_unary(module(), livery_grpc_service:method(), map() | tuple(), ctx()) ->
@@ -170,54 +174,119 @@ with_deadline(Ms, Run) ->
         {error, {deadline_exceeded, <<"deadline exceeded">>}}
     end.
 
--spec unary_response(callback_result(), livery_grpc_service:method(), server_opts()) ->
+%% Build the response for a unary outcome, in grpc or gRPC-Web framing.
+-spec unary_response(
+    callback_result(), livery_grpc_service:method(), server_opts(), livery_grpc_web:mode()
+) ->
     livery_resp:resp().
-unary_response({ok, Reply}, Method, Opts) ->
+unary_response(Outcome, Method, Opts, grpc) ->
+    unary_grpc_response(normalize_outcome(Outcome), Method, Opts);
+unary_response(Outcome, Method, Opts, Mode) ->
+    Frames = outcome_frames(normalize_outcome(Outcome), Method, Opts),
+    web_response(Mode, Opts, Frames, normalize_outcome(Outcome)).
+
+-spec unary_grpc_response(
+    ok | {ok, map() | tuple()} | {error, term()}, livery_grpc_service:method(), server_opts()
+) ->
+    livery_resp:resp().
+unary_grpc_response({ok, Reply}, Method, Opts) ->
     Frame = encode_message(Method, Reply, Opts),
-    Producer = fun(Emit) -> Emit(Frame) end,
-    ok_stream(Opts, Producer, ok);
-unary_response({error, Status}, _Method, Opts) when is_atom(Status) ->
-    ok_stream(Opts, fun(_Emit) -> ok end, {error, {Status, <<>>}});
-unary_response({error, Error}, _Method, Opts) when is_tuple(Error) ->
-    ok_stream(Opts, fun(_Emit) -> ok end, {error, Error}).
+    ok_stream(Opts, fun(Emit) -> Emit(Frame) end, {ok, Reply});
+unary_grpc_response({error, _} = Error, _Method, Opts) ->
+    ok_stream(Opts, fun(_Emit) -> ok end, Error).
+
+%% The message frames a successful outcome contributes (none on error).
+-spec outcome_frames(
+    ok | {ok, map() | tuple()} | {error, term()}, livery_grpc_service:method(), server_opts()
+) ->
+    [iodata()].
+outcome_frames({ok, Reply}, Method, Opts) -> [encode_message(Method, Reply, Opts)];
+outcome_frames({error, _}, _Method, _Opts) -> [].
+
+%% Normalise the bare-atom error form so the rest of the path sees a tuple.
+-spec normalize_outcome(callback_result()) -> ok | {ok, map() | tuple()} | {error, term()}.
+normalize_outcome({error, Status}) when is_atom(Status) -> {error, {Status, <<>>}};
+normalize_outcome(Other) -> Other.
 
 %%====================================================================
 %% Server streaming
 %%====================================================================
 
 -spec serve_server_stream(
-    livery_req:req(), livery_grpc_service:method(), module(), server_opts()
+    livery_req:req(), livery_grpc_service:method(), module(), server_opts(), livery_grpc_web:mode()
 ) ->
     livery_resp:resp().
-serve_server_stream(Req, Method, Handler, Opts) ->
-    case read_request_message(Req, Method) of
+serve_server_stream(Req, Method, Handler, Opts, Mode) ->
+    case read_request_message(Req, Method, Mode) of
         {ok, Request} ->
             Ctx = ctx(Req, Method),
-            Producer = server_stream_producer(Handler, Method, Request, Ctx, Opts),
-            ok_stream(Opts, Producer, deferred);
+            server_stream_response(Mode, Handler, Method, Request, Ctx, Opts);
         {error, Status, Msg} ->
-            trailers_only(Status, Msg)
+            error_response(Status, Msg, Mode)
     end.
 
-%% The producer drives the callback, handing it a `SendFun` that frames and
-%% emits one reply at a time. The callback's final result decides the
-%% trailers; it is stashed for the lazy trailers fun (see `ok_stream/2`).
--spec server_stream_producer(
+-spec server_stream_response(
+    livery_grpc_web:mode(),
+    module(),
+    livery_grpc_service:method(),
+    map() | tuple(),
+    ctx(),
+    server_opts()
+) ->
+    livery_resp:resp().
+server_stream_response(grpc, Handler, Method, Request, Ctx, Opts) ->
+    %% Stream frames as they come; the callback's outcome becomes the
+    %% HTTP trailers (stashed for the lazy trailers fun).
+    Producer = fun(Emit) ->
+        SendFun = fun(Reply) -> Emit(encode_message(Method, Reply, Opts)) end,
+        stash_outcome(invoke_server_stream(Handler, Method, Request, Ctx, SendFun)),
+        ok
+    end,
+    ok_stream(Opts, Producer, deferred);
+server_stream_response(grpc_web, Handler, Method, Request, Ctx, Opts) ->
+    %% Binary gRPC-Web: stream frames, then a trailer frame; no HTTP trailers.
+    Producer = fun(Emit) ->
+        SendFun = fun(Reply) -> Emit(encode_message(Method, Reply, Opts)) end,
+        Outcome = invoke_server_stream(Handler, Method, Request, Ctx, SendFun),
+        Emit(livery_grpc_web:trailer_frame(outcome_trailers(Outcome))),
+        ok
+    end,
+    livery_resp:stream(200, web_headers(grpc_web, Opts), Producer);
+server_stream_response(grpc_web_text, Handler, Method, Request, Ctx, Opts) ->
+    %% Text gRPC-Web base64s the whole body, so collect frames first.
+    {Frames, Outcome} = collect_server_stream(Handler, Method, Request, Ctx, Opts),
+    web_response(grpc_web_text, Opts, Frames, Outcome).
+
+-spec invoke_server_stream(
+    module(), livery_grpc_service:method(), map() | tuple(), ctx(), fun((map() | tuple()) -> term())
+) ->
+    ok | {error, term()}.
+invoke_server_stream(Handler, #{function := Fn}, Request, Ctx, SendFun) ->
+    try
+        Handler:Fn(Request, SendFun, Ctx)
+    catch
+        throw:{grpc_error, S, M} -> {error, {S, M}};
+        Class:Reason:Stack -> {error, {internal, crash_message(Class, Reason, Stack)}}
+    end.
+
+%% Run a server-streaming callback, gathering its frames into a list (for
+%% the text variant, which cannot stream).
+-spec collect_server_stream(
     module(), livery_grpc_service:method(), map() | tuple(), ctx(), server_opts()
 ) ->
-    fun((fun((iodata()) -> ok | {error, term()})) -> ok).
-server_stream_producer(Handler, #{function := Fn} = Method, Request, Ctx, Opts) ->
-    fun(Emit) ->
-        SendFun = fun(Reply) -> Emit(encode_message(Method, Reply, Opts)) end,
-        Outcome =
-            try
-                Handler:Fn(Request, SendFun, Ctx)
-            catch
-                throw:{grpc_error, S, M} -> {error, {S, M}};
-                Class:Reason:Stack -> {error, {internal, crash_message(Class, Reason, Stack)}}
-            end,
-        stash_outcome(Outcome),
-        ok
+    {[iodata()], ok | {error, term()}}.
+collect_server_stream(Handler, Method, Request, Ctx, Opts) ->
+    Ref = make_ref(),
+    Self = self(),
+    SendFun = fun(Reply) -> Self ! {Ref, encode_message(Method, Reply, Opts)} end,
+    Outcome = invoke_server_stream(Handler, Method, Request, Ctx, SendFun),
+    {drain_frames(Ref, []), Outcome}.
+
+-spec drain_frames(reference(), [iodata()]) -> [iodata()].
+drain_frames(Ref, Acc) ->
+    receive
+        {Ref, Frame} -> drain_frames(Ref, [Frame | Acc])
+    after 0 -> lists:reverse(Acc)
     end.
 
 %%====================================================================
@@ -229,14 +298,16 @@ server_stream_producer(Handler, #{function := Fn} = Method, Request, Ctx, Opts) 
 %% (`ok` / `{error, _}`) known up front, or `deferred` when the producer
 %% stashes it at runtime (streaming).
 -spec ok_stream(
-    server_opts(), fun((term()) -> ok | {error, term()}), ok | deferred | {error, term()}
+    server_opts(),
+    fun((term()) -> ok | {error, term()}),
+    ok | deferred | {ok, map() | tuple()} | {error, term()}
 ) ->
     livery_resp:resp().
 ok_stream(Opts, Producer, Outcome) ->
     Resp = livery_resp:stream(200, response_headers(Opts), Producer),
     livery_resp:with_trailers(trailers_fun(Outcome), Resp).
 
--spec trailers_fun(ok | deferred | {error, term()}) ->
+-spec trailers_fun(ok | deferred | {ok, map() | tuple()} | {error, term()}) ->
     fun(() -> [{binary(), binary()}]).
 trailers_fun(deferred) ->
     fun() -> outcome_trailers(take_outcome()) end;
@@ -258,13 +329,28 @@ outcome_trailers({error, Status}) when is_atom(Status) ->
 outcome_trailers(_Other) ->
     livery_grpc_status:trailers(internal, <<"invalid handler result">>).
 
-%% Trailers-Only: a single HEADERS block carrying the status. Built as an
-%% empty-body response whose headers already include grpc-status, since
-%% livery:emit/3 drops trailers on an empty body.
--spec trailers_only(livery_grpc_status:status(), binary()) -> livery_resp:resp().
-trailers_only(Status, Msg) ->
+%% An error before/without message frames, in the right framing for the
+%% mode. grpc uses a Trailers-Only reply (status in the HEADERS block,
+%% which livery:emit/3 keeps only because the body is empty); gRPC-Web puts
+%% the status in a trailer frame in the body.
+-spec error_response(livery_grpc_status:status(), binary(), livery_grpc_web:mode()) ->
+    livery_resp:resp().
+error_response(Status, Msg, grpc) ->
     Headers = base_headers() ++ livery_grpc_status:trailers(Status, Msg),
-    livery_resp:new(200, Headers, empty).
+    livery_resp:new(200, Headers, empty);
+error_response(Status, Msg, Mode) ->
+    web_response(Mode, #{}, [], {error, {Status, Msg}}).
+
+%% A full gRPC-Web response: message frames followed by the trailer frame,
+%% base64-encoded for the text variant.
+-spec web_response(
+    livery_grpc_web:mode(), server_opts(), [iodata()], ok | {ok, term()} | {error, term()}
+) ->
+    livery_resp:resp().
+web_response(Mode, Opts, Frames, Outcome) ->
+    Trailer = livery_grpc_web:trailer_frame(outcome_trailers(Outcome)),
+    Body = livery_grpc_web:encode_body(Mode, [Frames, Trailer]),
+    livery_resp:new(200, web_headers(Mode, Opts), {full, Body}).
 
 -spec unsupported_media_type() -> livery_resp:resp().
 unsupported_media_type() ->
@@ -279,9 +365,17 @@ base_headers() ->
 %% grpc-accept-encoding is a later refinement.)
 -spec response_headers(server_opts()) -> [{binary(), binary()}].
 response_headers(Opts) ->
+    maybe_encoding(Opts, base_headers()).
+
+-spec web_headers(livery_grpc_web:mode(), server_opts()) -> [{binary(), binary()}].
+web_headers(Mode, Opts) ->
+    maybe_encoding(Opts, [{<<"content-type">>, livery_grpc_web:content_type(Mode)}]).
+
+-spec maybe_encoding(server_opts(), [{binary(), binary()}]) -> [{binary(), binary()}].
+maybe_encoding(Opts, Headers) ->
     case maps:get(compression, Opts, identity) of
-        identity -> base_headers();
-        gzip -> base_headers() ++ [{<<"grpc-encoding">>, <<"gzip">>}]
+        identity -> Headers;
+        gzip -> Headers ++ [{<<"grpc-encoding">>, <<"gzip">>}]
     end.
 
 %%====================================================================
@@ -289,12 +383,21 @@ response_headers(Opts) ->
 %%====================================================================
 
 %% Read the whole request body and decode the single expected message.
--spec read_request_message(livery_req:req(), livery_grpc_service:method()) ->
+%% For the gRPC-Web text variant the body is base64 first.
+-spec read_request_message(
+    livery_req:req(), livery_grpc_service:method(), livery_grpc_web:mode()
+) ->
     {ok, map() | tuple()} | {error, livery_grpc_status:status(), binary()}.
-read_request_message(Req, Method) ->
+read_request_message(Req, Method, Mode) ->
     case collect_body(livery_req:body(Req)) of
-        {ok, Bin} -> decode_single(Bin, Req, Method);
-        {error, Reason} -> {error, internal, reason_bin(Reason)}
+        {ok, Bin} ->
+            try livery_grpc_web:decode_request(Mode, Bin) of
+                Decoded -> decode_single(Decoded, Req, Method)
+            catch
+                error:_ -> {error, internal, <<"bad base64 request body">>}
+            end;
+        {error, Reason} ->
+            {error, internal, reason_bin(Reason)}
     end.
 
 -spec collect_body(empty | {buffered, iodata()} | {stream, term()}) ->
