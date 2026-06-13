@@ -37,24 +37,8 @@ livery_grpc_client:call(Conn, Method, Request, #{
 }).
 ```
 
-Check it on the server. The cleanest place is a server interceptor (livery
-middleware), so every method is covered and the handler stays focused on
-business logic:
-
-```erlang
--module(auth_mw).
--behaviour(livery_middleware).
--export([call/3]).
-
-call(Req, Next, _State) ->
-    case bearer_token(livery_req:header(<<"authorization">>, Req)) of
-        {ok, _Claims} -> Next(Req);
-        error         -> livery_grpc_server:... %% see note
-    end.
-```
-
-Or check inside a handler from the context metadata and return
-`{error, {unauthenticated, _}}` when it is missing or invalid:
+Check it on the server. Read the token from the context metadata and
+return `{error, {unauthenticated, _}}` when it is missing or invalid:
 
 ```erlang
 say_hello(Request, #{metadata := Md}) ->
@@ -64,14 +48,18 @@ say_hello(Request, #{metadata := Md}) ->
     end.
 ```
 
+To cover every method without repeating the check, factor it into a helper
+the handlers call, or run a server interceptor (livery middleware) that
+validates the token and either calls `Next(Req)` or returns a gRPC error
+response. Returning the status from the handler is the simplest path and
+produces the right result on both gRPC and gRPC-Web framings.
+
 ## Notes
 
-- A rejecting middleware should produce a gRPC-shaped response. The
-  simplest, transport-agnostic approach is to authenticate in the handler
-  and return `{error, {unauthenticated, _}}`, which becomes the right
-  status on every framing (gRPC and gRPC-Web).
-- Use livery's existing auth middleware (bearer, JWKS, introspection) for
-  token validation, then enforce in the handler.
+- Use livery's existing auth middleware (bearer, JWKS, introspection) to
+  validate tokens, then enforce the decision where it is convenient.
+- Authenticate over TLS in production; a bearer token on a plaintext
+  connection is exposed.
 
 ## See also
 

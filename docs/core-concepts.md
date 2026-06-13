@@ -20,11 +20,33 @@ message HelloRequest { string name = 1; }
 message HelloReply   { string message = 1; }
 ```
 
-At build time, `rebar3_gpb_plugin` compiles this to an Erlang module
-(`helloworld_pb`) using gpb in maps mode. Messages are plain maps:
-`#{name => <<"ada">>}`. livery_grpc reads the service's methods, message
-types, and call kinds from that module at runtime, so there is no separate
-generated dispatch layer to keep in sync.
+At build time, `rebar3_gpb_plugin` compiles this to an Erlang module using
+gpb in maps mode. Messages are plain maps: `#{name => <<"ada">>}`.
+livery_grpc reads the service's methods, message types, and call kinds
+from that module at runtime, so there is no separate generated dispatch
+layer to keep in sync.
+
+### How the module and names are set
+
+The generated module name is the proto file name plus the
+`module_name_suffix` from `gpb_opts` (`_pb` by convention): `helloworld.proto`
+compiles to `helloworld_pb`, and `route_guide.proto` to `route_guide_pb`.
+The file name sets the module; the `package` line does not.
+
+When you call livery_grpc you pass three things from the proto:
+
+- the generated **module** (`helloworld_pb`),
+- the **service** name as an atom, exactly as written in the proto
+  (`service Greeter` is `'Greeter'`, `service RouteGuide` is
+  `'RouteGuide'`),
+- the **method** name as an atom (`'SayHello'`).
+
+```erlang
+{ok, Method} = livery_grpc_client:method(helloworld_pb, 'Greeter', 'SayHello').
+```
+
+The wire path is built from the package and these names:
+`/helloworld.Greeter/SayHello`.
 
 ## The four call types
 

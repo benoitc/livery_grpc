@@ -66,10 +66,14 @@ summary.
 ```erlang
 record_route(Stream, _Ctx) ->
     {ok, Points, _} = livery_grpc_stream:recv_all(Stream),
+    Named = [P || P <- Points, feature_name(P) =/= <<>>],
     {ok, #{point_count   => length(Points),
-           feature_count => count_named(Points),
+           feature_count => length(Named),
            distance      => distance(Points)}}.
 ```
+
+`feature_name/1`, `in_rectangle/3`, `distance/1`, and `features/0` are
+small helpers in `examples/route_guide.erl`.
 
 ### Bidirectional: RouteChat
 
@@ -111,7 +115,10 @@ Unary and server-streaming go through `call/3`:
 {ok, Feature} = livery_grpc_client:call(Conn, GF, #{latitude => 1, longitude => 1}),
 
 {ok, LF}   = livery_grpc_client:method(route_guide_pb, 'RouteGuide', 'ListFeatures'),
-{ok, Features} = livery_grpc_client:call(Conn, LF, #{lo => ..., hi => ...}).
+{ok, Features} = livery_grpc_client:call(Conn, LF, #{
+    lo => #{latitude => 0, longitude => 0},
+    hi => #{latitude => 10, longitude => 10}
+}).
 ```
 
 Client-streaming sends a list and gets one reply:

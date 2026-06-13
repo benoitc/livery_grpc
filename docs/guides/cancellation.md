@@ -21,30 +21,33 @@ connection with `close/1` cancels every call on it.
 
 ## See it on the server
 
-When a client cancels, resets the stream, or disconnects, livery delivers
-a message to the handler process:
-
-```erlang
-{livery_disconnect, _Ref, _Reason}
-```
-
-A streaming handler that runs a `receive` loop can match it and stop:
+A streaming handler that reads the request stream sees a cancel or reset
+as an error from `recv/1`, so the same loop that reads requests also stops
+on cancel:
 
 ```erlang
 loop(Stream) ->
-    receive
-        {livery_disconnect, _, _} -> ok
-    after 0 ->
-        case livery_grpc_stream:recv(Stream) of
-            {ok, Msg, Stream1} -> handle(Msg), loop(Stream1);
-            {eof, _}           -> ok
-        end
+    case livery_grpc_stream:recv(Stream) of
+        {ok, Msg, Stream1}         -> handle(Msg), loop(Stream1);
+        {eof, _Stream1}            -> ok;   %% client half-closed normally
+        {error, _Reason, _Stream1} -> ok    %% client cancelled or reset
     end.
 ```
 
-For work that does not poll a mailbox, register a cancel callback with
-`livery_req:on_disconnect/2` (the request is in the call context under
-`req`).
+A handler that does not read the request stream, such as a
+server-streaming push like health `Watch`, instead receives a message and
+can match it:
+
+```erlang
+receive
+    {livery_disconnect, _Ref, _Reason} -> ok;
+    ...
+end
+```
+
+For work that does not touch a mailbox at all, register a cancel callback
+with `livery_req:on_disconnect/2` (the request is in the call context
+under `req`).
 
 ## Notes
 

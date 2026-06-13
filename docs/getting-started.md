@@ -29,7 +29,10 @@ message HelloReply   { string message = 1; }
 ```
 
 `rebar3 compile` runs `rebar3_gpb_plugin`, which compiles this to the
-`helloworld_pb` module. Messages are maps.
+`helloworld_pb` module. The module name is the proto file name plus the
+`_pb` suffix from `gpb_opts`, so `helloworld.proto` becomes
+`helloworld_pb`. Messages are maps. You refer to the service and methods
+by the atoms written in the proto (`'Greeter'`, `'SayHello'`).
 
 ## 2. Implement the handler
 

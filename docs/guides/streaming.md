@@ -62,10 +62,13 @@ done.
 
 ```erlang
 chat(Stream, _Ctx) ->
+    loop(Stream).
+
+loop(Stream) ->
     case livery_grpc_stream:recv(Stream) of
         {ok, Msg, Stream1} ->
             livery_grpc_stream:send(Stream1, reply_for(Msg)),
-            chat(Stream1, _Ctx);
+            loop(Stream1);
         {eof, _Stream1} ->
             ok
     end.

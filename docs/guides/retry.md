@@ -11,7 +11,7 @@ on a set of status codes, up to a limit:
 
 ```erlang
 retry(Max, Codes) ->
-    fun Retry(Req, Next) ->
+    fun(Req, Next) ->
         case Next(Req) of
             {error, {Status, _}} = Err ->
                 case Max > 0 andalso lists:member(Status, Codes) of
