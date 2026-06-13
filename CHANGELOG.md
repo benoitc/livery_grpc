@@ -6,6 +6,11 @@ Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- A request message compressed with an unsupported `grpc-encoding` now
+  returns `unimplemented` (as the gRPC spec requires) instead of
+  `internal`. Added `livery_grpc_compression:request_algorithm/1`.
+
 ## [0.1.0] - 2026-06-13
 
 First release. gRPC for Erlang on the livery HTTP/2 stack: server and

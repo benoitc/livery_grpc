@@ -471,9 +471,22 @@ decode_single(Bin, Req, #{proto := Proto, input := Input}) ->
 -spec decode_payload(boolean(), binary(), livery_req:req(), module(), atom()) ->
     {ok, map() | tuple()} | {error, livery_grpc_status:status(), binary()}.
 decode_payload(Compressed, Payload, Req, Proto, Input) ->
-    Encoding = livery_grpc_compression:from_header(
-        livery_req:header(<<"grpc-encoding">>, Req)
-    ),
+    Header = livery_req:header(<<"grpc-encoding">>, Req),
+    case livery_grpc_compression:request_algorithm(Header) of
+        {ok, Encoding} ->
+            decode_with(Encoding, Compressed, Payload, Proto, Input);
+        {error, _Bad} when not Compressed ->
+            %% Uncompressed message: the unknown encoding does not apply.
+            decode_with(identity, Compressed, Payload, Proto, Input);
+        {error, Bad} ->
+            %% Compressed with an algorithm we cannot decode: per the gRPC
+            %% spec, this is unimplemented, not an internal error.
+            {error, unimplemented, <<"unsupported grpc-encoding: ", Bad/binary>>}
+    end.
+
+-spec decode_with(livery_grpc_compression:algorithm(), boolean(), binary(), module(), atom()) ->
+    {ok, map() | tuple()} | {error, livery_grpc_status:status(), binary()}.
+decode_with(Encoding, Compressed, Payload, Proto, Input) ->
     case livery_grpc_wire:decode_frame(Proto, Input, Encoding, {Compressed, Payload}) of
         {ok, Msg} -> {ok, Msg};
         {error, {grpc_compression, _}} -> {error, internal, <<"bad message compression">>};

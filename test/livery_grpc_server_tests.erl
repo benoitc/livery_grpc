@@ -15,6 +15,7 @@ server_test_() ->
             unary_error(Ctx),
             unary_crash(Ctx),
             unknown_method(Ctx),
+            unsupported_encoding(Ctx),
             server_stream(Ctx)
         ]
     end}.
@@ -63,6 +64,14 @@ unknown_method(#{port := Port}) ->
         ?assertEqual(unimplemented, GrpcStatus)
     end.
 
+%% A message compressed with an unsupported algorithm must be UNIMPLEMENTED.
+unsupported_encoding(#{port := Port}) ->
+    fun() ->
+        {200, [], GrpcStatus, _Msg} =
+            call_encoded(Port, <<"/helloworld.Greeter/SayHello">>, <<"deflate">>),
+        ?assertEqual(unimplemented, GrpcStatus)
+    end.
+
 server_stream(#{port := Port}) ->
     fun() ->
         {200, Replies, GrpcStatus, _Msg} =
@@ -108,6 +117,29 @@ call(Port, Path, RequestMsgs) ->
 frame(Msg) ->
     Bin = helloworld_pb:encode_msg(Msg, 'HelloRequest'),
     livery_grpc_frame:encode(Bin).
+
+%% Send a request whose frame sets the compressed flag and whose
+%% grpc-encoding the server does not support. Payload is arbitrary: it is
+%% rejected before any decompression.
+call_encoded(Port, Path, Encoding) ->
+    Headers = [
+        {<<":method">>, <<"POST">>},
+        {<<":path">>, Path},
+        {<<":scheme">>, <<"http">>},
+        {<<":authority">>, <<"localhost">>},
+        {<<"content-type">>, <<"application/grpc+proto">>},
+        {<<"te">>, <<"trailers">>},
+        {<<"grpc-encoding">>, Encoding}
+    ],
+    {ok, Conn} = h2:connect("localhost", Port, #{transport => tcp}),
+    try
+        {ok, StreamId} = h2:request(Conn, Headers, #{end_stream => false}),
+        Body = iolist_to_binary(livery_grpc_frame:encode(<<1, 2, 3>>, true)),
+        ok = h2:send_data(Conn, StreamId, Body, true),
+        collect(Conn, StreamId, undefined, [], undefined)
+    after
+        h2:close(Conn)
+    end.
 
 collect(Conn, StreamId, Status, DataAcc, Trailers) ->
     receive

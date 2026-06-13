@@ -32,3 +32,10 @@ supported_test() ->
     ?assert(livery_grpc_compression:is_supported(gzip)),
     ?assert(livery_grpc_compression:is_supported(identity)),
     ?assertNot(livery_grpc_compression:is_supported(snappy)).
+
+request_algorithm_test() ->
+    ?assertEqual({ok, identity}, livery_grpc_compression:request_algorithm(undefined)),
+    ?assertEqual({ok, identity}, livery_grpc_compression:request_algorithm(<<"identity">>)),
+    ?assertEqual({ok, gzip}, livery_grpc_compression:request_algorithm(<<"gzip">>)),
+    %% Unsupported encodings are reported, not silently downgraded.
+    ?assertEqual({error, <<"deflate">>}, livery_grpc_compression:request_algorithm(<<"deflate">>)).

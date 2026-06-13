@@ -12,7 +12,7 @@ clear.
 """.
 
 -export([compress/2, decompress/3]).
--export([is_supported/1, from_header/1, accept_header/0]).
+-export([is_supported/1, from_header/1, request_algorithm/1, accept_header/0]).
 
 -export_type([algorithm/0]).
 
@@ -59,6 +59,19 @@ from_header(undefined) -> identity;
 from_header(<<"identity">>) -> identity;
 from_header(<<"gzip">>) -> gzip;
 from_header(_Other) -> identity.
+
+-doc """
+Resolve a request's `grpc-encoding` strictly: `{ok, Algorithm}` for one we
+support, or `{error, Value}` for an unsupported one. Unlike `from_header/1`
+(which falls back to `identity`), this lets the server return
+`unimplemented` for a message compressed with an algorithm it cannot
+decode, as the gRPC spec requires.
+""".
+-spec request_algorithm(binary() | undefined) -> {ok, algorithm()} | {error, binary()}.
+request_algorithm(undefined) -> {ok, identity};
+request_algorithm(<<"identity">>) -> {ok, identity};
+request_algorithm(<<"gzip">>) -> {ok, gzip};
+request_algorithm(Other) when is_binary(Other) -> {error, Other}.
 
 -doc "The `grpc-accept-encoding` value advertising what we can decode.".
 -spec accept_header() -> binary().
