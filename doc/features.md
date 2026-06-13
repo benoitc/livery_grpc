@@ -1,5 +1,15 @@
 # livery_grpc - implementation plan
 
+## Status
+
+All phases below are implemented and tested (unit + property + in-tree
+interop, plus external grpcurl compliance via `make interop`): the wire
+layer, descriptors and codegen, the server and client for all four call
+types, deadlines, error details, gzip, interceptors on both sides, the
+health and reflection services, and gRPC-Web. The plan text below is kept
+as the original design record; the "GATED" notes referred to h2's
+bidirectional support, which shipped in h2 0.10.0 and is now in use.
+
 ## Context
 
 `livery` is an Erlang web framework over HTTP/1.1, HTTP/2, and HTTP/3,

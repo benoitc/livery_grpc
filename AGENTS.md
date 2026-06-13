@@ -20,14 +20,28 @@ proto/                     .proto fixtures (helloworld), compiled to
                            src/*_pb.erl by rebar3_gpb_plugin (gpb, maps
                            mode); generated *_pb modules are excluded from
                            erlfmt, elvis, and xref
-src/livery_grpc.erl        Public facade: dedicated gRPC listener
-                           (start_link/start_server) + server/client entry
-src/livery_grpc_frame.erl  Length-prefixed framing + streaming decoder
-src/livery_grpc_codec.erl  encode/decode glue over the gpb module
-src/livery_grpc_status.erl Canonical codes <-> grpc-status/grpc-message
-src/livery_grpc_server.erl Dispatch POST /pkg.Svc/Method to callbacks
-src/livery_grpc_client.erl Call services over the h2 client (erpc-like)
-src/livery_grpc_app.erl / _sup.erl   application + supervisor
+src/livery_grpc.erl         Public facade: dedicated gRPC listener
+                            (start_server) with reflection/compression opts
+src/livery_grpc_server.erl  Dispatch POST /pkg.Svc/Method to callbacks; all
+                            four call kinds; grpc and gRPC-Web framing
+src/livery_grpc_client.erl  Call services over the h2 client (erpc-like);
+                            interceptor stack; streaming handle
+src/livery_grpc_stream.erl  Server-side stream handle (recv/recv_all/send)
+                            for client-streaming and bidirectional handlers
+src/livery_grpc_service.erl Method descriptors from gpb introspection
+src/livery_grpc_codegen.erl Generate <svc>_client stubs + <svc>_service
+                            behaviour (make stubs)
+src/livery_grpc_wire.erl    Message <-> wire glue (codec+compression+frame)
+src/livery_grpc_frame.erl   Length-prefixed framing + streaming decoder
+src/livery_grpc_codec.erl   encode/decode glue over the gpb module
+src/livery_grpc_compression Per-message identity/gzip
+src/livery_grpc_status.erl  Canonical codes <-> grpc-status/grpc-message
+src/livery_grpc_timeout.erl grpc-timeout deadlines
+src/livery_grpc_web.erl     gRPC-Web framing (binary + text)
+src/livery_grpc_reflection  grpc.reflection.v1 service (bidi)
+src/livery_grpc_health.erl  grpc.health.v1 service (Check + Watch)
+src/livery_grpc_health_store gen_server: status + watch subscriptions
+src/livery_grpc_app.erl / _sup.erl   application + supervisor (health store)
 ```
 
 ## Required checks
