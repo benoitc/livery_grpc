@@ -22,7 +22,7 @@ ok = livery_grpc:stop_server(Server).
 The transport defaults to `tcp` (h2c); pass `transport => ssl` with
 `cert` and `key` to serve over TLS with ALPN-negotiated h2. Each service
 binds a `handler` module; its callbacks receive the decoded request
-message and a context (see `livery_grpc_server:ctx/0`).
+message and a context (see `t:livery_grpc_server:ctx/0`).
 """.
 
 -export([start_server/1, stop_server/1]).
