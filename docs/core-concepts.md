@@ -54,6 +54,29 @@ The wire path is built from the package and these names:
 produces the module, see the
 [Erlang integration guide](guides/erlang-integration.md).
 
+### Two modules: generated messages and your handler
+
+There are two modules per service, and they are different things:
+
+- The **generated** `*_pb` module (`helloworld_pb`, from
+  `helloworld.proto`) holds the messages and their encode/decode. It is
+  generated; you never edit it.
+- Your **handler** module holds the RPC functions (`say_hello/2`, ...).
+  You write it, and you choose its name; it does not have to match the
+  proto. The RouteGuide example names its handler `route_guide`, alongside
+  the generated `route_guide_pb`.
+
+You connect the two when you start the server: `proto` is the generated
+module, `handler` is yours.
+
+```erlang
+livery_grpc:start_server(#{
+    services => [#{proto   => route_guide_pb,   %% generated messages
+                   service => 'RouteGuide',
+                   handler => route_guide}]     %% your functions
+}).
+```
+
 ## The four call types
 
 gRPC has four call types. livery_grpc supports all of them.

@@ -29,7 +29,9 @@ maps: a `Feature` is `#{name => <<...>>, location => #{latitude => _, longitude 
 
 ## Implement the four methods
 
-The handler module exports one snake_case function per RPC.
+The handler is a module you write, separate from the generated
+`route_guide_pb` (which holds the messages). This example names it
+`route_guide`. It exports one snake_case function per RPC.
 
 ### Unary: GetFeature
 
