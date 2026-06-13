@@ -141,6 +141,32 @@ a client sees `{error, {Status, Msg}}`. See the
 [error handling](guides/error-handling.md) and
 [status codes](guides/status-codes.md) guides.
 
+## Multiple services
+
+A server takes a list of services, so you run many on one listener. Each
+entry binds a generated module, a service name, and a handler:
+
+```erlang
+livery_grpc:start_server(#{
+    port     => 50051,
+    services => [
+        #{proto => greeter_pb,     service => 'Greeter',    handler => my_greeter},
+        #{proto => route_guide_pb, service => 'RouteGuide', handler => route_guide},
+        livery_grpc_health:service()
+    ],
+    reflection => true
+}).
+```
+
+The dispatcher routes each call by its path (`/package.Service/Method`),
+so the services coexist with no conflict. The built-in health and
+reflection services are just entries in the same list. A single `.proto`
+can also declare several `service` blocks; register one entry per service
+(same module, different service atom).
+
+Start a second server only when you need a separate port, TLS config, or
+isolation. The usual pattern is one server with many services.
+
 ## Connections
 
 A client opens a connection with `livery_grpc_client:connect/2,3` and
