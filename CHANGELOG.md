@@ -39,3 +39,6 @@ Versioning.
   text), with the status delivered as an in-body trailer frame. Unary and
   server-streaming. Reflection is deferred: its RPC is bidirectional and
   waits on the h2 bidi work.
+- Example (`greeter_example`), a quickstart guide, and a `grpcurl` interop
+  smoke test (`make interop`) confirming on-the-wire compliance with an
+  external gRPC client.
