@@ -31,3 +31,7 @@ Versioning.
   wait; server parses, exposes in the context, and aborts a unary handler
   that overruns), error details via `grpc-status-details-bin`, request
   metadata, and livery middleware as gRPC interceptors.
+- Health: the standard `grpc.health.v1.Health` service
+  (`livery_grpc_health:service/0`), with per-service serving status.
+  `Check` is unary; `Watch` emits the current status once (live updates
+  follow the bidirectional work).
