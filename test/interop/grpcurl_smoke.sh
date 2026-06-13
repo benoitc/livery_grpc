@@ -23,7 +23,7 @@ erl -noshell \
   -pa _build/examples/checkouts/*/ebin \
   -pa _build/examples/lib/livery_grpc/examples \
   -eval "application:ensure_all_started(livery_grpc),
-         {ok,_}=livery_grpc:start_server(#{port=>${PORT},
+         {ok,_}=livery_grpc:start_server(#{port=>${PORT}, reflection=>true,
            services=>[#{proto=>helloworld_pb,service=>'Greeter',handler=>greeter_example},
                       livery_grpc_health:service()]}),
          timer:sleep(60000), halt()." &
@@ -37,6 +37,16 @@ for _ in $(seq 1 30); do
 done
 
 fail() { echo "FAIL: $1"; exit 1; }
+
+echo "== reflection (no -proto) =="
+OUT=$(grpcurl -plaintext localhost:${PORT} list)
+echo "$OUT"
+echo "$OUT" | grep -q "helloworld.Greeter" || fail "reflection list"
+# A fully reflective call: no -proto, schema discovered over reflection.
+OUT=$(grpcurl -plaintext -d '{"name":"reflected"}' \
+  localhost:${PORT} helloworld.Greeter/SayHello)
+echo "$OUT"
+echo "$OUT" | grep -q "hello reflected" || fail "reflective call"
 
 echo "== unary =="
 OUT=$(grpcurl -plaintext -proto proto/helloworld.proto \

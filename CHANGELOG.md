@@ -51,3 +51,7 @@ Versioning.
   middleware: `interceptors` on `connect/3` or per call, with `before/1`,
   `after_response/1`, and `wrap/1`, matching the `livery_client` layer
   shape (Tower layers on the BEAM).
+- Server reflection (`grpc.reflection.v1`): enable with `reflection =>
+  true` and tools like grpcurl discover services and message schemas at
+  runtime, with no local `.proto`. Verified with grpcurl `list`,
+  `describe`, and a fully reflective call.

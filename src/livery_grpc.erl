@@ -49,6 +49,8 @@ message and a context (see `livery_grpc_server:ctx/0`).
     acceptors => pos_integer(),
     %% Outbound message compression (default identity).
     compression => livery_grpc_compression:algorithm(),
+    %% Mount the grpc.reflection.v1 service so tools can discover the API.
+    reflection => boolean(),
     %% Optional livery middleware stack wrapping the gRPC handler.
     middleware => livery_middleware:stack(),
     config => term()
@@ -65,10 +67,20 @@ Returns the listener handle for `stop_server/1` and `server_port/1`.
 """.
 -spec start_server(server_opts()) -> {ok, server()} | {error, term()}.
 start_server(Opts) when is_map(Opts) ->
-    Services = maps:get(services, Opts),
+    Services = registrations(Opts),
     Index = livery_grpc_service:index(Services),
-    Handler = livery_grpc_server:handler(Index, server_config(Opts)),
+    Handler = livery_grpc_server:handler(Index, server_config(Opts, Services)),
     livery_h2:start(h2_opts(Opts, Handler)).
+
+%% The service list, with the reflection service appended when reflection
+%% is enabled.
+-spec registrations(server_opts()) -> [livery_grpc_service:registration()].
+registrations(Opts) ->
+    Services = maps:get(services, Opts),
+    case maps:get(reflection, Opts, false) of
+        true -> Services ++ [livery_grpc_reflection:service()];
+        false -> Services
+    end.
 
 -doc "Stop a gRPC server.".
 -spec stop_server(server()) -> ok.
@@ -84,9 +96,15 @@ server_port(Server) ->
 %% Internals
 %%====================================================================
 
--spec server_config(server_opts()) -> map().
-server_config(Opts) ->
-    maps:with([compression], Opts).
+%% The livery_grpc_server options: compression plus, when reflection is
+%% on, the descriptor set built from every registered service.
+-spec server_config(server_opts(), [livery_grpc_service:registration()]) -> map().
+server_config(Opts, Services) ->
+    Base = maps:with([compression], Opts),
+    case maps:get(reflection, Opts, false) of
+        true -> Base#{reflection => livery_grpc_reflection:build(Services)};
+        false -> Base
+    end.
 
 -spec h2_opts(server_opts(), fun((livery_req:req()) -> livery_resp:resp())) -> map().
 h2_opts(Opts, Handler) ->

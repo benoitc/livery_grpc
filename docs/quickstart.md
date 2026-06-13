@@ -129,8 +129,18 @@ say_hello_chat(Stream, _Ctx) ->
 On the client, use `client_stream/3` for client-streaming, and `open/2` +
 `send/2` + `send_end/1` + `recv/1` for bidirectional.
 
+## Reflection
+
+Start the server with `reflection => true` to mount
+`grpc.reflection.v1.ServerReflection`. Tools then work without a local
+`.proto`:
+
+```
+$ grpcurl -plaintext localhost:50051 list
+$ grpcurl -plaintext -d '{"name":"ada"}' localhost:50051 helloworld.Greeter/SayHello
+```
+
 ## What works today
 
-All four call types on the server and the client, plus health and
-gRPC-Web. Server reflection is deferred (its RPC is bidirectional; the
-streaming pieces it needs now exist).
+All four call types on the server and the client, plus health, gRPC-Web,
+and server reflection.

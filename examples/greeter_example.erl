@@ -69,6 +69,7 @@ start(Port) ->
     {ok, _} = application:ensure_all_started(livery_grpc),
     livery_grpc:start_server(#{
         port => Port,
+        reflection => true,
         services => [#{proto => helloworld_pb, service => 'Greeter', handler => ?MODULE}]
     }).
 

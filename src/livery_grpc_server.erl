@@ -37,6 +37,8 @@ replies through it, interleaved, inside the chunked response producer.
     method := livery_grpc_service:method(),
     %% The call deadline in milliseconds from grpc-timeout, or `infinity`.
     deadline := timeout(),
+    %% Reflection data, present only for the reflection service.
+    reflection => term(),
     req := livery_req:req()
 }.
 
@@ -51,7 +53,10 @@ replies through it, interleaved, inside the chunked response producer.
     | {error, {livery_grpc_status:status(), binary()}}
     | {error, {livery_grpc_status:status(), binary(), binary()}}.
 
--type server_opts() :: #{compression => livery_grpc_compression:algorithm()}.
+-type server_opts() :: #{
+    compression => livery_grpc_compression:algorithm(),
+    reflection => term()
+}.
 
 -define(CONTENT_TYPE, <<"application/grpc+proto">>).
 %% Cap a single inbound request message (16 MiB), matching livery's body
@@ -138,7 +143,7 @@ serve(_Req, #{kind := Kind}, _Handler, _Opts, Mode) when
 serve_unary(Req, Method, Handler, Opts, Mode) ->
     case read_request_message(Req, Method, Mode) of
         {ok, Request} ->
-            Ctx = ctx(Req, Method),
+            Ctx = ctx(Req, Method, Opts),
             Outcome = invoke_unary(Handler, Method, Request, Ctx),
             unary_response(Outcome, Method, Opts, Mode);
         {error, Status, Msg} ->
@@ -227,7 +232,7 @@ normalize_outcome(Other) -> Other.
 serve_server_stream(Req, Method, Handler, Opts, Mode) ->
     case read_request_message(Req, Method, Mode) of
         {ok, Request} ->
-            Ctx = ctx(Req, Method),
+            Ctx = ctx(Req, Method, Opts),
             server_stream_response(Mode, Handler, Method, Request, Ctx, Opts);
         {error, Status, Msg} ->
             error_response(Status, Msg, Mode)
@@ -304,7 +309,7 @@ drain_frames(Ref, Acc) ->
     livery_resp:resp().
 serve_client_stream(Req, #{function := Fn} = Method, Handler, Opts) ->
     Stream = livery_grpc_stream:reader(Req, Method),
-    Ctx = ctx(Req, Method),
+    Ctx = ctx(Req, Method, Opts),
     Outcome = guard_call(fun() -> Handler:Fn(Stream, Ctx) end),
     unary_response(Outcome, Method, Opts, grpc).
 
@@ -317,7 +322,7 @@ serve_bidi(Req, #{function := Fn} = Method, Handler, Opts) ->
     Compression = maps:get(compression, Opts, identity),
     Producer = fun(Emit) ->
         Stream = livery_grpc_stream:bidi(Req, Method, Emit, Compression),
-        Ctx = ctx(Req, Method),
+        Ctx = ctx(Req, Method, Opts),
         stash_outcome(guard_call(fun() -> Handler:Fn(Stream, Ctx) end)),
         ok
     end,
@@ -487,14 +492,18 @@ encode_message(#{proto := Proto, output := Output}, Reply, Opts) ->
 %% Context and helpers
 %%====================================================================
 
--spec ctx(livery_req:req(), livery_grpc_service:method()) -> ctx().
-ctx(Req, Method) ->
-    #{
+-spec ctx(livery_req:req(), livery_grpc_service:method(), server_opts()) -> ctx().
+ctx(Req, Method, Opts) ->
+    Base = #{
         metadata => metadata(Req),
         method => Method,
         deadline => livery_grpc_timeout:parse(livery_req:header(<<"grpc-timeout">>, Req)),
         req => Req
-    }.
+    },
+    case maps:find(reflection, Opts) of
+        {ok, Data} -> Base#{reflection => Data};
+        error -> Base
+    end.
 
 %% Call metadata is the request's custom headers: drop the HTTP and gRPC
 %% framing headers, keep what the application sent.

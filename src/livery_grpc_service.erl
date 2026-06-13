@@ -15,7 +15,7 @@ inbound `:path` to one, the client builds a request from one.
 """.
 
 -export([service_names/1, methods/2, method/3]).
--export([kind/1, path/3, function_name/1]).
+-export([kind/1, path/3, function_name/1, service_full_name/2, qualify/2, package/1]).
 -export([index/1]).
 
 -export_type([kind/0, method/0, registration/0]).
@@ -148,6 +148,17 @@ to_snake([C | Rest], Prev) when C >= $A, C =< $Z ->
 to_snake([C | Rest], _Prev) ->
     [C | to_snake(Rest, [C])].
 
+-doc "The fully qualified service name, e.g. `<<\"helloworld.Greeter\">>`.".
+-spec service_full_name(module(), atom()) -> binary().
+service_full_name(Proto, Service) ->
+    qualify(package(Proto), atom_to_binary(Service, utf8)).
+
+-doc "Join a package and a local name into a fully qualified name.".
+-spec qualify(binary(), binary()) -> binary().
+qualify(<<>>, Name) -> Name;
+qualify(Package, Name) -> <<Package/binary, ".", Name/binary>>.
+
+-doc "The proto package as a binary, or `<<>>` when none is declared.".
 -spec package(module()) -> binary().
 package(Proto) ->
     case erlang:function_exported(Proto, get_package_name, 0) of

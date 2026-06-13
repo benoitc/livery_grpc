@@ -10,9 +10,9 @@ See `docs/quickstart.md` to build and call a service, and
 Working today: all four call types (unary, server-streaming,
 client-streaming, bidirectional) on both the server and client, deadlines,
 error details, gzip, livery middleware as interceptors, the standard
-health service, and gRPC-Web (binary and text). Server reflection is
-deferred (its own RPC is bidirectional; the plumbing is in place to add
-it next).
+health service, gRPC-Web (binary and text), and server reflection
+(`reflection => true`, so grpcurl/Postman discover the API with no local
+`.proto`).
 
 ## Why
 
