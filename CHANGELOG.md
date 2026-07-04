@@ -6,6 +6,11 @@ Versioning.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-04
+
+### Changed
+- Bump the `livery` dependency to 0.5.0.
+
 ## [0.1.1] - 2026-06-13
 
 ### Added
