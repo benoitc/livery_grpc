@@ -12,7 +12,7 @@ block is explained below.
 
 ```erlang
 {deps, [
-    {livery_grpc, "0.1.1"}
+    {livery_grpc, "0.1.2"}
 ]}.
 
 %% The build plugin that compiles your .proto files.
