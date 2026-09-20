@@ -6,6 +6,13 @@ Versioning.
 
 ## [0.2.1] - 2026-09-21
 
+### Fixed
+- The hex package now declares `livery` and `h2` as requirements. Earlier
+  packages were built from a tree with `_checkouts`, which dropped them
+  (0.2.0 declared only `gpb`), so `livery_grpc` could not be installed
+  from hex on its own. `make publish` builds from a clean export of HEAD
+  and checks the requirements.
+
 ### Changed
 - Require `livery` `~> 0.10.2` (any 0.10.x from 0.10.2). `barrel_mcp` and
   `barrel_a2a` are no longer fetched or locked: livery made them

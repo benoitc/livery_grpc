@@ -1,4 +1,4 @@
-.PHONY: compile proto stubs eunit ct test interop interop-client dialyzer xref lint fmt check clean
+.PHONY: compile proto stubs eunit ct test interop interop-client dialyzer xref lint fmt check hex-build publish clean
 
 compile:
 	rebar3 compile
@@ -47,6 +47,15 @@ fmt:
 
 ## Full offline gate: build, static checks, style, unit tests.
 check: compile xref dialyzer lint fmt eunit
+
+## Build the hex package from a clean export of HEAD and check that its
+## requirements list livery, h2 and gpb. Never run `rebar3 hex publish`
+## from this tree: `_checkouts` drops those deps from the package.
+hex-build:
+	./scripts/hex_package.sh build
+
+publish:
+	./scripts/hex_package.sh publish
 
 clean:
 	rebar3 clean
