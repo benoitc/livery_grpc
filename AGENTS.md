@@ -70,8 +70,13 @@ eunit). `warn_missing_spec` is deliberately not enabled: gpb-generated
 modules cannot satisfy it. Hand-written modules carry specs; dialyzer
 enforces types.
 
-`livery` is consumed from `_checkouts/livery` (a symlink to the sibling
-checkout) until it is published to hex.
+`livery` and `h2` come from hex. A local `_checkouts/` symlink may
+override them during development, but rebar3 does not lock a checkout app
+and rebar3_hex writes the package requirements from the lock. Publish with
+`make publish` (it builds from a clean export of HEAD and checks that the
+requirements list livery, h2 and gpb), never with `rebar3 hex publish`
+from a tree with `_checkouts`. Do not commit a `rebar.lock` rewritten in
+such a tree: it loses the livery, h1 and h2 entries.
 
 ## Conventions
 
