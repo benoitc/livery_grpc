@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format is
 based on Keep a Changelog, and this project adheres to Semantic
 Versioning.
 
+## [Unreleased]
+
+### Changed
+- Bump `livery` to 0.10.2. `barrel_mcp` and `barrel_a2a` are no longer
+  fetched or locked: livery made them optional dependencies.
+
 ## [0.2.0] - 2026-09-20
 
 ### Added
