@@ -54,8 +54,10 @@ check: compile xref dialyzer lint fmt eunit
 hex-build:
 	./scripts/hex_package.sh build
 
+## make publish PUBLISH_ARGS=--replace overwrites a version published less
+## than an hour ago.
 publish:
-	./scripts/hex_package.sh publish
+	./scripts/hex_package.sh publish $(PUBLISH_ARGS)
 
 clean:
 	rebar3 clean
