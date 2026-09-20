@@ -5,10 +5,13 @@
 ## `_checkouts/livery` silently drops livery (and h2) from its
 ## requirements. Exporting HEAD leaves `_checkouts` behind.
 ##
-## Usage: scripts/hex_package.sh [build|publish]
+## Usage: scripts/hex_package.sh [build|publish] [rebar3 hex publish args]
+## e.g. `scripts/hex_package.sh publish --replace` to overwrite a version
+## published less than an hour ago.
 set -eu
 
 MODE="${1:-build}"
+[ $# -gt 0 ] && shift
 REQUIRED="gpb h2 livery"
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -38,5 +41,5 @@ done
 echo "livery_grpc $VSN requirements ok: $REQUIRED"
 
 if [ "$MODE" = "publish" ]; then
-    rebar3 hex publish
+    rebar3 hex publish "$@"
 fi
