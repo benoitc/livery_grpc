@@ -18,7 +18,7 @@ inbound `:path` to one, the client builds a request from one.
 -export([kind/1, path/3, function_name/1, service_full_name/2, qualify/2, package/1]).
 -export([index/1]).
 
--export_type([kind/0, method/0, registration/0]).
+-export_type([kind/0, method/0, registration/0, entry/0]).
 
 -type kind() :: unary | server_stream | client_stream | bidi.
 
@@ -40,11 +40,18 @@ inbound `:path` to one, the client builds a request from one.
 }.
 
 %% A user binding: which callback module serves a given proto service.
+%% `config` is opaque to livery_grpc: it reaches the handler as the
+%% context's `config`, so a service that serves one backend (an A2A
+%% server, a store) carries its handle without a global.
 -type registration() :: #{
     proto := module(),
     service := atom(),
-    handler := module()
+    handler := module(),
+    config => term()
 }.
+
+%% What the routing index holds for one wire path.
+-type entry() :: {method(), module(), term()}.
 
 %%====================================================================
 %% Introspection
@@ -178,18 +185,20 @@ normalize_package(Pkg) when is_atom(Pkg) -> atom_to_binary(Pkg, utf8).
 -doc """
 Build a path-keyed routing index from a list of registrations.
 
-Each entry maps a wire path to `{Method, Handler}`: the method descriptor
-plus the callback module that serves it. The server uses this to dispatch
-an inbound request in one map lookup.
+Each entry maps a wire path to `{Method, Handler, Config}`: the method
+descriptor, the callback module that serves it, and the registration's
+`config` (`undefined` when it declared none). The server uses this to
+dispatch an inbound request in one map lookup.
 """.
--spec index([registration()]) -> #{binary() => {method(), module()}}.
+-spec index([registration()]) -> #{binary() => entry()}.
 index(Registrations) ->
     lists:foldl(fun index_one/2, #{}, Registrations).
 
 -spec index_one(registration(), map()) -> map().
-index_one(#{proto := Proto, service := Service, handler := Handler}, Acc) ->
+index_one(#{proto := Proto, service := Service, handler := Handler} = Reg, Acc) ->
+    Config = maps:get(config, Reg, undefined),
     lists:foldl(
-        fun(#{path := Path} = M, A) -> A#{Path => {M, Handler}} end,
+        fun(#{path := Path} = M, A) -> A#{Path => {M, Handler, Config}} end,
         Acc,
         methods(Proto, Service)
     ).

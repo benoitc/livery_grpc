@@ -37,6 +37,10 @@ replies through it, interleaved, inside the chunked response producer.
     method := livery_grpc_service:method(),
     %% The call deadline in milliseconds from grpc-timeout, or `infinity`.
     deadline := timeout(),
+    %% The service's own `config` from its registration, `undefined`
+    %% when it declared none. A service handler serving one backend
+    %% (an A2A server, a store) finds its handle here.
+    config := term(),
     %% Reflection data, present only for the reflection service.
     reflection => term(),
     req := livery_req:req()
@@ -55,7 +59,10 @@ replies through it, interleaved, inside the chunked response producer.
 
 -type server_opts() :: #{
     compression => livery_grpc_compression:algorithm(),
-    reflection => term()
+    reflection => term(),
+    %% Set per request by the dispatcher from the matched service's
+    %% registration; not something a caller passes to `handler/2`.
+    service_config => term()
 }.
 
 -define(CONTENT_TYPE, <<"application/grpc+proto">>).
@@ -76,7 +83,7 @@ handler(Index) ->
 -doc """
 Build the gRPC request handler from a routing index.
 
-`Index` maps a wire path to `{Method, Handler}` (see
+`Index` maps a wire path to `{Method, Handler, Config}` (see
 `livery_grpc_service:index/1`). `Opts` may set `compression` for the
 outbound encoding (default `identity`).
 """.
@@ -107,12 +114,20 @@ dispatch_post(Req, Index, Opts) ->
             unsupported_media_type();
         Mode ->
             case maps:find(livery_req:path(Req), Index) of
-                {ok, {Method, Handler}} ->
-                    serve(Req, Method, Handler, Opts, Mode);
+                {ok, Entry} ->
+                    {Method, Handler, Config} = entry(Entry),
+                    serve(Req, Method, Handler, Opts#{service_config => Config}, Mode);
                 error ->
                     error_response(unimplemented, <<"unknown method">>, Mode)
             end
     end.
+
+%% An index built before per-service config existed maps a path to a
+%% plain `{Method, Handler}` pair; accept both shapes.
+-spec entry({livery_grpc_service:method(), module()} | livery_grpc_service:entry()) ->
+    livery_grpc_service:entry().
+entry({Method, Handler}) -> {Method, Handler, undefined};
+entry({Method, Handler, Config}) -> {Method, Handler, Config}.
 
 -spec serve(
     livery_req:req(), livery_grpc_service:method(), module(), server_opts(), livery_grpc_web:mode()
@@ -511,6 +526,7 @@ ctx(Req, Method, Opts) ->
         metadata => metadata(Req),
         method => Method,
         deadline => livery_grpc_timeout:parse(livery_req:header(<<"grpc-timeout">>, Req)),
+        config => maps:get(service_config, Opts, undefined),
         req => Req
     },
     case maps:find(reflection, Opts) of

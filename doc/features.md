@@ -10,6 +10,14 @@ health and reflection services, and gRPC-Web. The plan text below is kept
 as the original design record; the "GATED" notes referred to h2's
 bidirectional support, which shipped in h2 0.10.0 and is now in use.
 
+
+Known gap: server reflection cannot serve the schemas of a proto that
+uses a `map<>` field. gpb's descriptor output omits the synthetic map
+entry types such a field needs (`google.protobuf.Struct.FieldsEntry` and
+friends), which protoreflect rejects. Fixing it means synthesising those
+nested types when splitting gpb's `FileDescriptorSet` in
+`livery_grpc_reflection`.
+
 ## Context
 
 `livery` is an Erlang web framework over HTTP/1.1, HTTP/2, and HTTP/3,
