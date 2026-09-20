@@ -37,6 +37,6 @@ index_test() ->
     Reg = #{proto => helloworld_pb, service => 'Greeter', handler => my_handler},
     Index = livery_grpc_service:index([Reg]),
     ?assertEqual(4, map_size(Index)),
-    {M, Handler} = maps:get(<<"/helloworld.Greeter/SayHello">>, Index),
+    {M, Handler, undefined} = maps:get(<<"/helloworld.Greeter/SayHello">>, Index),
     ?assertEqual(my_handler, Handler),
     ?assertEqual(say_hello, maps:get(function, M)).

@@ -4,7 +4,26 @@ All notable changes to this project are documented here. The format is
 based on Keep a Changelog, and this project adheres to Semantic
 Versioning.
 
-## [Unreleased]
+## [0.2.0] - 2026-09-20
+
+### Added
+- A service registration may carry a `config`, delivered to every
+  callback of that service as the context's `config`, so a service
+  that serves one backend carries its handle without a global.
+- A2A over gRPC lives in a companion package,
+  [`livery_grpc_a2a`](https://github.com/benoitc/livery_grpc_a2a), which
+  composes this library with `barrel_a2a`. It stays out of this one so a
+  gRPC user does not take on an A2A implementation, and out of
+  `barrel_a2a` so an A2A user does not take on gpb and a code generation
+  step. The `config` field above is what lets it hand its agent to the
+  service handler from outside.
+
+### Changed
+- The protobuf build uses gpb's `use_packages` so a `.proto` can
+  reference messages from another package (`google.protobuf.Struct`),
+  with `msg_fqname` and `service_fqname` renamed back to their base
+  names so generated Erlang names are unchanged.
+- Bump `livery` to 0.9.2 and `h2` to 0.12.x.
 
 ## [0.1.2] - 2026-07-04
 

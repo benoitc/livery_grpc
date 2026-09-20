@@ -36,7 +36,11 @@ message and a context (see `t:livery_grpc_server:ctx/0`).
 -type service_spec() :: #{
     proto := module(),
     service := atom(),
-    handler := module()
+    handler := module(),
+    %% Handed to every callback of this service as the context's
+    %% `config`. `livery_grpc_a2a:service/1` uses it to carry the A2A
+    %% server the handler serves.
+    config => term()
 }.
 
 -type server_opts() :: #{
