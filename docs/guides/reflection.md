@@ -40,5 +40,11 @@ $ grpcurl -plaintext -d '{"name":"ada"}' localhost:50051 myapp.Greeter/SayHello
 - Reflection answers `list_services`, `file_by_filename`, and
   `file_containing_symbol`. Extensions are a proto2 feature and report
   not-found.
+- `map<>` fields are served the way protoc describes them: one
+  `<FieldName>Entry` message nested in the message that owns the field.
+  gpb describes them differently, so the descriptors are rewritten at
+  server start. Imported files (`google.protobuf.Struct`) are covered.
+- Symbols resolve at any depth and in any package: nested messages and
+  enums, methods (`myapp.Greeter.SayHello`), and imported types.
 - It is convenient in development and for debugging. In locked-down
   production you may prefer to leave it off and distribute `.proto` files.

@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is
 based on Keep a Changelog, and this project adheres to Semantic
 Versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- Server reflection serves protos that use `map<>` fields, including
+  imported ones such as `google.protobuf.Struct`. gpb describes a map
+  entry as a shared top-level `MapFieldEntry_N_M` message with required
+  key and value, which protoreflect rejects, so grpcurl and Postman could
+  list such a service but not describe or call it. The entries are now
+  rewritten to protoc's shape: one `<FieldName>Entry` nested in the owner
+  of each map field, with optional key and value.
+- `file_containing_symbol` resolves nested messages and enums, methods,
+  and symbols of imported packages. Imported messages were indexed under
+  the importing file's package.
+
 ## [0.2.3] - 2026-09-21
 
 ### Fixed

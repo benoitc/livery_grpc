@@ -2,7 +2,7 @@
 -moduledoc """
 End-to-end suite against a real running server.
 
-Boots one livery_grpc server (Greeter + health + reflection) on a real
+Boots one livery_grpc server (Greeter + MapEcho + health + reflection) on a real
 h2c port, then exercises the full journey two ways: with the in-tree
 client (`local` group) and with grpcurl, a real grpc-go client, over
 reflection so no `.proto` is needed (`grpcurl` group, skipped if grpcurl
@@ -13,6 +13,7 @@ is not installed).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("gpb/descr_src/gpb_descriptor.hrl").
 
 -define(GREETER, #{proto => helloworld_pb, service => 'Greeter', handler => greeter_server}).
 
@@ -34,21 +35,27 @@ groups() ->
             t_deadline,
             t_health_check,
             t_health_watch,
-            t_reflection_list
+            t_reflection_list,
+            t_map_unary,
+            t_map_reflection
         ]},
         {grpcurl, [], [
             t_grpcurl_list,
             t_grpcurl_unary,
             t_grpcurl_client_stream,
             t_grpcurl_bidi,
-            t_grpcurl_health
+            t_grpcurl_health,
+            t_grpcurl_describe_map,
+            t_grpcurl_map_call
         ]}
     ].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(livery_grpc),
     {ok, Server} = livery_grpc:start_server(#{
-        port => 0, reflection => true, services => [?GREETER, livery_grpc_health:service()]
+        port => 0,
+        reflection => true,
+        services => [?GREETER, map_fixture:registration(), livery_grpc_health:service()]
     }),
     [{server, Server}, {port, livery_grpc:server_port(Server)} | Config].
 
@@ -158,6 +165,54 @@ t_reflection_list(Config) ->
         ?assert(lists:member(<<"helloworld.Greeter">>, Names))
     end).
 
+%% Map and Struct fields round-trip through the in-tree client.
+t_map_unary(Config) ->
+    with_conn(Config, fun(Conn) ->
+        {ok, M} = livery_grpc_client:method(mapfields_pb, 'MapEcho', 'Echo'),
+        Request = #{
+            labels => #{<<"env">> => <<"prod">>, <<"tier">> => <<"web">>},
+            extra_labels => #{<<"zone">> => <<"a">>},
+            by_name => #{<<"one">> => #{note => <<"first">>}},
+            meta => #{
+                fields => #{
+                    <<"name">> => #{kind => {string_value, <<"e2e">>}},
+                    <<"count">> => #{kind => {number_value, 2.0}}
+                }
+            },
+            nested => #{by_id => #{7 => #{note => <<"seven">>}}}
+        },
+        ?assertEqual({ok, Request}, livery_grpc_client:call(Conn, M, Request))
+    end).
+
+%% The in-tree client reads the map schema over reflection: every map field
+%% points at an entry nested in its owner, across the file and its imports.
+t_map_reflection(Config) ->
+    with_conn(Config, fun(Conn) ->
+        {ok, R} = livery_grpc_client:method(
+            reflection_pb, 'ServerReflection', 'ServerReflectionInfo'
+        ),
+        {ok, Call} = livery_grpc_client:open(Conn, R),
+        ok = livery_grpc_client:send(Call, #{
+            message_request => {file_containing_symbol, <<"livery.interop.v1.MapRequest">>}
+        }),
+        {ok, #{message_response := {file_descriptor_response, #{file_descriptor_proto := Bins}}},
+            _} = livery_grpc_client:recv(Call),
+        ok = livery_grpc_client:send_end(Call),
+        Files = [gpb_descriptor:decode_msg(B, 'FileDescriptorProto') || B <- Bins],
+        Entries = lists:sort(lists:flatmap(fun map_entries/1, Files)),
+        ?assertEqual(
+            [
+                ".google.protobuf.Struct.FieldsEntry",
+                ".livery.interop.v1.MapRequest.ByNameEntry",
+                ".livery.interop.v1.MapRequest.ExtraLabelsEntry",
+                ".livery.interop.v1.MapRequest.LabelsEntry",
+                ".livery.interop.v1.MapRequest.Nested.ByIdEntry"
+            ],
+            Entries
+        ),
+        ?assertEqual([], Entries -- lists:flatmap(fun repeated_msg_types/1, Files))
+    end).
+
 %%====================================================================
 %% grpcurl (real external grpc-go client, over reflection)
 %%====================================================================
@@ -188,9 +243,57 @@ t_grpcurl_health(Config) ->
     Out = grpcurl(Config, "-d '{\"service\":\"\"}'", "grpc.health.v1.Health/Check"),
     ?assert(contains(Out, "SERVING")).
 
+%% protoreflect accepts the served descriptors and renders the map fields.
+t_grpcurl_describe_map(Config) ->
+    Request = grpcurl(Config, "", "describe livery.interop.v1.MapRequest"),
+    ?assert(contains(Request, "map<string, string> labels")),
+    ?assert(contains(Request, "map<string, string> extra_labels")),
+    ?assert(contains(Request, "map<string, .livery.interop.v1.Inner> by_name")),
+    ?assert(contains(Request, "map<int32, .livery.interop.v1.Inner> by_id")),
+    Struct = grpcurl(Config, "", "describe google.protobuf.Struct"),
+    ?assert(contains(Struct, "map<string, .google.protobuf.Value> fields")).
+
+t_grpcurl_map_call(Config) ->
+    Out = grpcurl(
+        Config,
+        "-d '{\"labels\":{\"env\":\"prod\"},\"by_name\":{\"one\":{\"note\":\"first\"}},"
+        "\"meta\":{\"name\":\"grpcurl\"},\"nested\":{\"by_id\":{\"7\":{\"note\":\"seven\"}}}}'",
+        "livery.interop.v1.MapEcho/Echo"
+    ),
+    ?assert(contains(Out, "\"env\": \"prod\"")),
+    ?assert(contains(Out, "\"note\": \"first\"")),
+    ?assert(contains(Out, "\"name\": \"grpcurl\"")),
+    ?assert(contains(Out, "\"note\": \"seven\"")).
+
 %%====================================================================
 %% Helpers
 %%====================================================================
+
+%% Fully qualified names of the map entry messages defined in a file.
+map_entries(#'FileDescriptorProto'{package = Package, message_type = Msgs}) ->
+    lists:flatmap(fun(M) -> map_entries("." ++ Package, M) end, Msgs).
+
+map_entries(Scope, #'DescriptorProto'{name = Name, nested_type = Nested, options = Options}) ->
+    Fqn = Scope ++ "." ++ Name,
+    Own =
+        case Options of
+            #'MessageOptions'{map_entry = true} -> [Fqn];
+            _ -> []
+        end,
+    Own ++ lists:flatmap(fun(M) -> map_entries(Fqn, M) end, Nested).
+
+%% The type names the repeated message fields of a file point at: every
+%% map field is one of them.
+repeated_msg_types(#'FileDescriptorProto'{message_type = Msgs}) ->
+    lists:flatmap(fun repeated_msg_types/1, Msgs);
+repeated_msg_types(#'DescriptorProto'{options = #'MessageOptions'{map_entry = true}}) ->
+    [];
+repeated_msg_types(#'DescriptorProto'{field = Fields, nested_type = Nested}) ->
+    [
+        T
+     || #'FieldDescriptorProto'{label = 'LABEL_REPEATED', type = 'TYPE_MESSAGE', type_name = T} <-
+            Fields
+    ] ++ lists:flatmap(fun repeated_msg_types/1, Nested).
 
 method(Name) ->
     {ok, M} = livery_grpc_client:method(helloworld_pb, 'Greeter', Name),
