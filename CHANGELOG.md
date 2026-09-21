@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is
 based on Keep a Changelog, and this project adheres to Semantic
 Versioning.
 
+## [0.2.2] - 2026-09-21
+
+### Fixed
+- The 0.2.1 hex package still declared only `gpb`: it was published
+  before the packaging fix landed and could not be replaced. 0.2.2 is
+  built with `make publish`, so it declares `livery` and `h2` and
+  installs from hex on its own.
+
+### Changed
+- `make publish PUBLISH_ARGS=--replace` passes arguments to
+  `rebar3 hex publish`, to overwrite a version published less than an
+  hour ago.
+
 ## [0.2.1] - 2026-09-21
 
 ### Fixed
