@@ -7,6 +7,23 @@ on:
     branches: [main]
 
 jobs:
+  # rebar3_hex writes a package's requirements from rebar.lock, and a
+  # local build with `_checkouts` strips a checked-out dependency out of
+  # it. A release cut from such a tree ships requirements that cannot
+  # install. Catch a stripped lock here rather than on hex.
+  lock:
+    name: Lock requirements
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: rebar.lock names every runtime dependency
+        run: |
+          for dep in gpb h2 livery; do
+            grep -q "<<\"$dep\">>" rebar.lock \
+              || { echo "rebar.lock is missing $dep; rebuild it without _checkouts"; exit 1; }
+          done
+          echo "rebar.lock names gpb, h2 and livery"
+
   # ---- Static checks: fail fast ------------------------------------------
   format:
     name: erlfmt
