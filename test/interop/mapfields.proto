@@ -1,0 +1,28 @@
+// Fixture for reflection over map<> fields. Compiled in memory by
+// test/map_fixture.erl, so it is not part of the application.
+syntax = "proto3";
+
+package livery.interop.v1;
+
+import "google/protobuf/struct.proto";
+
+message Inner {
+  string note = 1;
+}
+
+message MapRequest {
+  message Nested {
+    map<int32, Inner> by_id = 1;
+  }
+
+  // Two fields of the same map type: gpb describes both with one entry.
+  map<string, string> labels = 1;
+  map<string, string> extra_labels = 2;
+  map<string, Inner> by_name = 3;
+  google.protobuf.Struct meta = 4;
+  Nested nested = 5;
+}
+
+service MapEcho {
+  rpc Echo(MapRequest) returns (MapRequest);
+}

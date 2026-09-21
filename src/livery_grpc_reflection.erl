@@ -17,7 +17,16 @@ The served file descriptors come from gpb's `descriptor/0` (the
 `descriptor` build option), which returns a `FileDescriptorSet`; this
 module splits it into the per-file `FileDescriptorProto` bytes the
 reflection protocol expects.
+
+gpb describes a `map<>` field with a top-level `MapFieldEntry_N_M`
+message shared by every field of the same map type, with `required`
+key and value. protoc, and the clients that validate descriptors
+(protoreflect, so grpcurl and Postman), expect one `<FieldName>Entry`
+message nested in the owner of each map field, with `optional` key and
+value. The split rewrites the entries into that shape.
 """.
+
+-include_lib("gpb/descr_src/gpb_descriptor.hrl").
 
 -export([service/0, build/1]).
 -export([server_reflection_info/2]).
@@ -59,27 +68,164 @@ build(Registrations) ->
     {Files, Symbols} = lists:foldl(fun index_proto/2, {#{}, #{}}, Protos),
     #{services => Services, files => Files, symbols => Symbols}.
 
-%% Index one proto module: map each of its file names and each symbol it
-%% defines (services, messages, enums) to the module's descriptor files.
+%% Index one proto module: map each of its file names and each symbol its
+%% files define (services, methods, messages, enums, at any nesting and in
+%% any package) to the module's descriptor files.
 -spec index_proto(module(), {map(), map()}) -> {map(), map()}.
 index_proto(Proto, {Files, Symbols}) ->
-    Fdps = file_descriptors(Proto),
-    Files1 = lists:foldl(fun(Fdp, Acc) -> Acc#{fdp_name(Fdp) => Fdps} end, Files, Fdps),
-    Symbols1 = lists:foldl(fun(Sym, Acc) -> Acc#{Sym => Fdps} end, Symbols, symbols(Proto)),
+    Descriptors = file_descriptors(Proto),
+    Fdps = [gpb_descriptor:encode_msg(D) || D <- Descriptors],
+    Files1 = lists:foldl(
+        fun(D, Acc) -> Acc#{to_binary(D#'FileDescriptorProto'.name) => Fdps} end,
+        Files,
+        Descriptors
+    ),
+    Symbols1 = lists:foldl(
+        fun(Sym, Acc) -> Acc#{Sym => Fdps} end,
+        Symbols,
+        lists:flatmap(fun file_symbols/1, Descriptors)
+    ),
     {Files1, Symbols1}.
 
-%% The FileDescriptorProto bytes for a proto module (the file plus any
-%% dependencies), extracted from gpb's FileDescriptorSet.
--spec file_descriptors(module()) -> [binary()].
+%% The FileDescriptorProtos of a proto module (the file plus any
+%% dependencies), from gpb's FileDescriptorSet, with map entries normalised.
+-spec file_descriptors(module()) -> [gpb_descriptor:'FileDescriptorProto'()].
 file_descriptors(Proto) ->
-    field1_values(Proto:descriptor()).
+    #'FileDescriptorSet'{file = Files} =
+        gpb_descriptor:decode_msg(Proto:descriptor(), 'FileDescriptorSet'),
+    [normalize_file(File) || File <- list(Files)].
 
--spec symbols(module()) -> [binary()].
-symbols(Proto) ->
-    Package = livery_grpc_service:package(Proto),
+%% Fully qualified names (no leading dot) of everything a file defines.
+-spec file_symbols(gpb_descriptor:'FileDescriptorProto'()) -> [binary()].
+file_symbols(#'FileDescriptorProto'{} = File) ->
+    Scope = scope(File#'FileDescriptorProto'.package),
     Names =
-        Proto:get_service_names() ++ Proto:get_msg_names() ++ Proto:get_enum_names(),
-    [livery_grpc_service:qualify(Package, atom_to_binary(N, utf8)) || N <- Names].
+        lists:flatmap(
+            fun(M) -> msg_symbols(Scope, M) end, list(File#'FileDescriptorProto'.message_type)
+        ) ++
+            [
+                qualify(Scope, E#'EnumDescriptorProto'.name)
+             || E <- list(File#'FileDescriptorProto'.enum_type)
+            ] ++
+            lists:flatmap(
+                fun(S) -> service_symbols(Scope, S) end, list(File#'FileDescriptorProto'.service)
+            ),
+    [to_binary(tl(Name)) || Name <- Names].
+
+-spec msg_symbols(string(), gpb_descriptor:'DescriptorProto'()) -> [string()].
+msg_symbols(Scope, #'DescriptorProto'{} = Msg) ->
+    Fqn = qualify(Scope, Msg#'DescriptorProto'.name),
+    [Fqn] ++
+        [
+            qualify(Fqn, E#'EnumDescriptorProto'.name)
+         || E <- list(Msg#'DescriptorProto'.enum_type)
+        ] ++
+        lists:flatmap(fun(N) -> msg_symbols(Fqn, N) end, list(Msg#'DescriptorProto'.nested_type)).
+
+-spec service_symbols(string(), gpb_descriptor:'ServiceDescriptorProto'()) -> [string()].
+service_symbols(Scope, #'ServiceDescriptorProto'{} = Service) ->
+    Fqn = qualify(Scope, Service#'ServiceDescriptorProto'.name),
+    [
+        Fqn
+        | [
+            qualify(Fqn, M#'MethodDescriptorProto'.name)
+         || M <- list(Service#'ServiceDescriptorProto'.method)
+        ]
+    ].
+
+%%====================================================================
+%% Map entry normalisation
+%%====================================================================
+
+%% Move gpb's top-level map entry messages to where protoc puts them: one
+%% `<FieldName>Entry` nested in the owner of each map field.
+-spec normalize_file(gpb_descriptor:'FileDescriptorProto'()) ->
+    gpb_descriptor:'FileDescriptorProto'().
+normalize_file(#'FileDescriptorProto'{message_type = Msgs0} = File) ->
+    Msgs = list(Msgs0),
+    Scope = scope(File#'FileDescriptorProto'.package),
+    Entries =
+        #{
+            qualify(Scope, M#'DescriptorProto'.name) => M
+         || M <- Msgs, is_map_entry(M)
+        },
+    File#'FileDescriptorProto'{
+        message_type = [
+            normalize_msg(M, Scope, Entries)
+         || M <- Msgs, not is_map_entry(M)
+        ]
+    }.
+
+-spec normalize_msg(gpb_descriptor:'DescriptorProto'(), string(), map()) ->
+    gpb_descriptor:'DescriptorProto'().
+normalize_msg(#'DescriptorProto'{} = Msg, Scope, Entries) ->
+    Fqn = qualify(Scope, Msg#'DescriptorProto'.name),
+    Nested = [normalize_msg(N, Fqn, Entries) || N <- list(Msg#'DescriptorProto'.nested_type)],
+    {Fields, Added} = lists:mapfoldl(
+        fun(Field, Acc) -> normalize_field(Field, Fqn, Entries, Acc) end,
+        [],
+        list(Msg#'DescriptorProto'.field)
+    ),
+    Msg#'DescriptorProto'{field = Fields, nested_type = Nested ++ lists:reverse(Added)}.
+
+%% A field typed by a gpb map entry gets its own nested copy of the entry.
+-spec normalize_field(gpb_descriptor:'FieldDescriptorProto'(), string(), map(), [
+    gpb_descriptor:'DescriptorProto'()
+]) ->
+    {gpb_descriptor:'FieldDescriptorProto'(), [gpb_descriptor:'DescriptorProto'()]}.
+normalize_field(#'FieldDescriptorProto'{type_name = undefined} = Field, _Fqn, _Entries, Acc) ->
+    {Field, Acc};
+normalize_field(#'FieldDescriptorProto'{type_name = TypeName} = Field, Fqn, Entries, Acc) ->
+    case maps:find(to_string(TypeName), Entries) of
+        {ok, Entry} ->
+            Name = map_entry_name(to_string(Field#'FieldDescriptorProto'.name)),
+            Entry1 = Entry#'DescriptorProto'{
+                name = Name,
+                field = [
+                    F#'FieldDescriptorProto'{label = 'LABEL_OPTIONAL'}
+                 || F <- list(Entry#'DescriptorProto'.field)
+                ]
+            },
+            {Field#'FieldDescriptorProto'{type_name = qualify(Fqn, Name)}, [Entry1 | Acc]};
+        error ->
+            {Field, Acc}
+    end.
+
+-spec is_map_entry(gpb_descriptor:'DescriptorProto'()) -> boolean().
+is_map_entry(#'DescriptorProto'{options = #'MessageOptions'{map_entry = true}}) -> true;
+is_map_entry(#'DescriptorProto'{}) -> false.
+
+%% protoc's entry name: the field name camel-cased, plus "Entry"
+%% (`by_id` -> `ByIdEntry`).
+-spec map_entry_name(string()) -> string().
+map_entry_name(FieldName) ->
+    camel(FieldName, true) ++ "Entry".
+
+-spec camel(string(), boolean()) -> string().
+camel([$_ | Rest], _Upper) -> camel(Rest, true);
+camel([C | Rest], true) -> [string:to_upper(C) | camel(Rest, false)];
+camel([C | Rest], false) -> [C | camel(Rest, false)];
+camel([], _Upper) -> [].
+
+%% The fully qualified prefix of a file's top-level names.
+-spec scope(unicode:chardata() | undefined) -> string().
+scope(undefined) -> "";
+scope(Package) -> "." ++ to_string(Package).
+
+-spec qualify(string(), unicode:chardata() | undefined) -> string().
+qualify(Scope, Name) ->
+    Scope ++ "." ++ to_string(Name).
+
+-spec to_string(unicode:chardata() | undefined) -> string().
+to_string(undefined) -> "";
+to_string(Chars) -> unicode:characters_to_list(Chars).
+
+-spec to_binary(unicode:chardata() | undefined) -> binary().
+to_binary(Chars) -> unicode:characters_to_binary(to_string(Chars)).
+
+-spec list([T] | undefined) -> [T].
+list(undefined) -> [];
+list(L) -> L.
 
 %%====================================================================
 %% Bidirectional handler
@@ -147,59 +293,6 @@ error_reply(Request, Code, Message) ->
 -spec empty_data() -> data().
 empty_data() ->
     #{services => [], files => #{}, symbols => #{}}.
-
-%%====================================================================
-%% Minimal protobuf descriptor parsing
-%%====================================================================
-
-%% The FileDescriptorProto `name` field (field 1) as a binary.
--spec fdp_name(binary()) -> binary().
-fdp_name(Fdp) ->
-    case field1_values(Fdp) of
-        [Name | _] -> Name;
-        [] -> <<>>
-    end.
-
-%% Every length-delimited field-1 value at the top level of a protobuf
-%% message. For a FileDescriptorSet that is each FileDescriptorProto; for a
-%% FileDescriptorProto field 1 is its name.
--spec field1_values(binary()) -> [binary()].
-field1_values(Bin) ->
-    [V || {1, V} <- scan(Bin, [])].
-
-%% Scan top-level fields, keeping length-delimited values as `{Field, Bin}`
-%% and skipping everything else.
--spec scan(binary(), [{non_neg_integer(), binary()}]) -> [{non_neg_integer(), binary()}].
-scan(<<>>, Acc) ->
-    lists:reverse(Acc);
-scan(Bin, Acc) ->
-    {Tag, Rest} = varint(Bin),
-    Field = Tag bsr 3,
-    case Tag band 7 of
-        2 ->
-            {Len, Rest1} = varint(Rest),
-            <<Value:Len/binary, Rest2/binary>> = Rest1,
-            scan(Rest2, [{Field, Value} | Acc]);
-        0 ->
-            {_V, Rest1} = varint(Rest),
-            scan(Rest1, Acc);
-        1 ->
-            <<_:8/binary, Rest1/binary>> = Rest,
-            scan(Rest1, Acc);
-        5 ->
-            <<_:4/binary, Rest1/binary>> = Rest,
-            scan(Rest1, Acc)
-    end.
-
--spec varint(binary()) -> {non_neg_integer(), binary()}.
-varint(Bin) ->
-    varint(Bin, 0, 0).
-
--spec varint(binary(), non_neg_integer(), non_neg_integer()) -> {non_neg_integer(), binary()}.
-varint(<<1:1, Group:7, Rest/binary>>, Shift, Acc) ->
-    varint(Rest, Shift + 7, Acc bor (Group bsl Shift));
-varint(<<0:1, Group:7, Rest/binary>>, Shift, Acc) ->
-    {Acc bor (Group bsl Shift), Rest}.
 
 -spec format(term()) -> binary().
 format(Reason) ->
