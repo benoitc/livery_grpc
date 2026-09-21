@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is
 based on Keep a Changelog, and this project adheres to Semantic
 Versioning.
 
-## [Unreleased]
+## [0.2.4] - 2026-09-21
 
 ### Fixed
 
