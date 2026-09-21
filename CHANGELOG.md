@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format is
 based on Keep a Changelog, and this project adheres to Semantic
 Versioning.
 
+## [0.2.3] - 2026-09-21
+
+### Fixed
+
+- The published package declares `livery` and `h2` in its requirements
+  again. rebar3_hex writes them from `rebar.lock`, and a local build
+  with `_checkouts` strips a checked-out dependency from the lock, so a
+  release cut from such a tree recorded `gpb` alone. Installing
+  livery_grpc from hex then produced no `livery` and starting it failed
+  with `livery.app: no such file or directory`. 0.2.0 through 0.2.2 are
+  affected; use 0.2.3.
+- CI checks that the committed lock still names them, so a stripped
+  lock cannot reach a release again.
+
 ## [0.2.2] - 2026-09-21
 
 ### Fixed
