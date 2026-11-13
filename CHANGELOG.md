@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is
 based on Keep a Changelog, and this project adheres to Semantic
 Versioning.
 
+## [Unreleased]
+
+### Changed
+
+- Requires livery 0.13.0 and h2 0.17.0. livery 0.13.0 depends on h2
+  0.17, so both move together. An application that pins an older livery
+  or h2 must upgrade them to use this release.
+
 ## [0.2.4] - 2026-09-21
 
 ### Fixed
